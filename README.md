@@ -1,6 +1,6 @@
-# Claude Code Grant Producer
+# grant-wire-scout
 
-A scheduled **Claude Code** producer for Sov's grant-intelligence pipeline, A/B-tested against the (flaky/dead) Codex producer. Slots in as a 7th cohort alongside the Stringer's existing intake sources, one layer upstream of the Wire Room.
+**The Grant Wire's scout** — a scheduled Claude Code producer that discovers and source-verifies grant opportunities, A/B-tested against the (flaky/dead) Codex producer. Slots in as a 7th cohort alongside the Stringer's existing intake sources, one layer upstream of the Wire Room.
 
 ## Why
 

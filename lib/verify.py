@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-UA = "Mozilla/5.0 (grant-producer-claude/verify; +contact: sov@sovereignsignal.com)"
+UA = "Mozilla/5.0 (grant-wire-scout/verify; +contact: sov@sovereignsignal.com)"
 
 
 def normalize_text(s: str) -> str:
