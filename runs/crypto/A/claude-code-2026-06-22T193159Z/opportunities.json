@@ -1,0 +1,295 @@
+{
+  "producer": "claude-code",
+  "variant": "A",
+  "wire": "crypto",
+  "run_id": "claude-code-2026-06-22T193159Z",
+  "generated_at": "2026-06-22T19:31:59Z",
+  "opportunities": [
+    {
+      "name": "Stellar Community Fund \u2014 SCF #45 Build Award",
+      "source_url": "https://communityfund.stellar.org/awards",
+      "wire": "crypto",
+      "amount": "up to $150,000 in XLM",
+      "deadline": "2026-07-26",
+      "summary": "Apply to SCF #45, the current open Build Award round (Open, Integration, and RFP tracks) for teams shipping products on Stellar. Full submissions due July 26, 2026; submit the interest form ASAP to be invited. Round #44 just closed June 14, 2026.",
+      "classification": "GRANT",
+      "fit_score": 90,
+      "fit_reason": "current 6-week round, future deadline, clear amount + tracks",
+      "evidence": [
+        "https://communityfund.stellar.org/awards"
+      ],
+      "discovered_via": "web_search",
+      "verified": true,
+      "source_snippet": "\u2026build awards $150k+ | stellar ecosystem grants & funding get started award\u2026",
+      "verification": {
+        "status": "verified",
+        "matched": [
+          "$150,000",
+          "150,000",
+          "2026-07-26",
+          "july 26",
+          "june 14",
+          "scf",
+          "stellar"
+        ],
+        "missing": [
+          "150000"
+        ],
+        "fetched_at": "2026-06-22T19:36:39.740923Z",
+        "http_status": 200,
+        "content_len": 119205,
+        "claims": {
+          "name_words": [
+            "stellar",
+            "scf"
+          ],
+          "amounts": [
+            "150,000",
+            "150000",
+            "$150,000"
+          ],
+          "deadlines": [
+            "2026-07-26",
+            "july 26",
+            "june 14"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Tether Developer Grants Program",
+      "source_url": "https://tether.io/news/tether-launches-developer-grants-program-to-fund-local-first-ai-and-payments-infrastructure/",
+      "wire": "crypto",
+      "amount": "~$1,500\u2013$4,000 per task (paid in USD\u20ae or Bitcoin; no total cap)",
+      "deadline": "rolling",
+      "summary": "Apply to active tasks in Tether's newly launched developer grants program (announced May 11, 2026) funding wallet infrastructure, browser extensions, e-commerce integrations, edge-AI/QVAC/WDK libraries, docs, and tooling. Each task carries a fixed payout and deadline; apply at tether.dev.",
+      "classification": "GRANT",
+      "fit_score": 86,
+      "fit_reason": "brand-new May 2026 launch, open now, clear per-task amounts",
+      "evidence": [
+        "https://tether.io/news/tether-launches-developer-grants-program-to-fund-local-first-ai-and-payments-infrastructure/"
+      ],
+      "discovered_via": "web_search",
+      "verified": true,
+      "source_snippet": "\u2026tether launches developer grants program to fund lo\u2026",
+      "verification": {
+        "status": "verified",
+        "matched": [
+          "1,500",
+          "1500",
+          "4,000",
+          "may 11",
+          "tether"
+        ],
+        "missing": [
+          "4000"
+        ],
+        "fetched_at": "2026-06-22T19:36:43.233333Z",
+        "http_status": 200,
+        "content_len": 11565,
+        "claims": {
+          "name_words": [
+            "tether"
+          ],
+          "amounts": [
+            "1,500",
+            "1500",
+            "4,000",
+            "4000"
+          ],
+          "deadlines": [
+            "may 11"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Avalanche Foundation Research Grants \u2014 Network Economics",
+      "source_url": "https://www.avax.network/about/blog/research-grants-avalanche-network-economics",
+      "wire": "crypto",
+      "amount": "up to $50,000 USD (paid across 3 milestones over 12 months)",
+      "deadline": "rolling",
+      "summary": "Submit a research proposal (max 10 pages) on cryptoasset pricing/valuation or validator economics & PoS security for up to $50,000. Announced April 29, 2026; applications reviewed on a rolling basis, earlier submissions encouraged. Apply at build.avax.network/grants/avalanche-research-proposals.",
+      "classification": "GRANT",
+      "fit_score": 80,
+      "fit_reason": "fresh late-April 2026 round, open rolling, amount + eligibility clear",
+      "evidence": [
+        "https://www.avax.network/about/blog/research-grants-avalanche-network-economics"
+      ],
+      "discovered_via": "web_search",
+      "verified": true,
+      "source_snippet": "\u2026the avalanche foundation opens up to $50,000 in research g\u2026",
+      "verification": {
+        "status": "verified",
+        "matched": [
+          "$50,000",
+          "50,000",
+          "avalanche",
+          "economics"
+        ],
+        "missing": [
+          "50000",
+          "april 29"
+        ],
+        "fetched_at": "2026-06-22T19:36:45.114378Z",
+        "http_status": 200,
+        "content_len": 25421,
+        "claims": {
+          "name_words": [
+            "avalanche",
+            "economics"
+          ],
+          "amounts": [
+            "50,000",
+            "50000",
+            "$50,000"
+          ],
+          "deadlines": [
+            "april 29"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Circle Developer Grants",
+      "source_url": "https://www.circle.com/grant",
+      "wire": "crypto",
+      "amount": "tiered USDC funding (specific amounts not disclosed)",
+      "deadline": "rolling",
+      "summary": "Apply for tiered USDC grants for teams integrating USDC, Wallets, CCTP, and Arc into shipping products. Active 2026 cohort (Circle announced its first 2026 grant recipients); reviewed on a rolling basis via the Questbook grants portal at circle.questbook.app.",
+      "classification": "GRANT",
+      "fit_score": 66,
+      "fit_reason": "confirmed 2026 cycle, rolling/open, but amounts undisclosed",
+      "evidence": [
+        "https://www.circle.com/grant"
+      ],
+      "discovered_via": "web_search",
+      "verified": false,
+      "source_snippet": "\u2026circle developer grants | circle !function(o,c){var\u2026",
+      "verification": {
+        "status": "partial",
+        "matched": [
+          "circle"
+        ],
+        "missing": [],
+        "fetched_at": "2026-06-22T19:36:46.304317Z",
+        "http_status": 200,
+        "content_len": 48076,
+        "claims": {
+          "name_words": [
+            "circle"
+          ],
+          "amounts": [],
+          "deadlines": []
+        }
+      }
+    },
+    {
+      "name": "Sui Foundation Grants ($50M ecosystem initiative)",
+      "source_url": "https://www.sui.io/programs-funding",
+      "wire": "crypto",
+      "amount": "varies by track: DeFi Moonshots up to $500,000 in liquidity incentives; Academic Research Awards $25,000; plus Hydropower accelerator and rolling RFPs",
+      "deadline": "rolling",
+      "summary": "Apply to Sui's currently-open funding tracks under the $50M ecosystem initiative launched February 2026: DeFi Moonshots (up to $500k liquidity incentives), Academic Research Awards ($25k), the Hydropower accelerator, and rolling RFPs. All accept applications on an ongoing basis via sui.io/programs-funding.",
+      "classification": "GRANT",
+      "fit_score": 60,
+      "fit_reason": "2026 initiative with concrete open tracks, but ~4 months old and standing",
+      "evidence": [
+        "https://www.sui.io/programs-funding"
+      ],
+      "discovered_via": "web_search",
+      "verified": false,
+      "source_snippet": "\u2026sui | programs and funding webfont.load({ google\u2026",
+      "verification": {
+        "status": "partial",
+        "matched": [
+          "initiative",
+          "sui"
+        ],
+        "missing": [
+          "25,000",
+          "25000",
+          "500,000",
+          "500000",
+          "50m",
+          "february 20"
+        ],
+        "fetched_at": "2026-06-22T19:36:47.605577Z",
+        "http_status": 200,
+        "content_len": 66161,
+        "claims": {
+          "name_words": [
+            "sui",
+            "50m",
+            "initiative"
+          ],
+          "amounts": [
+            "500,000",
+            "500000",
+            "25,000",
+            "25000"
+          ],
+          "deadlines": [
+            "february 20"
+          ]
+        }
+      }
+    }
+  ],
+  "rejected": [
+    {
+      "name": "Ethereum Foundation ESP \u2014 Academic Grants / PhD Fellowship (phdfp26)",
+      "source_url": "https://esp.ethereum.foundation/applicants/open-rounds",
+      "classification": "EXPIRED",
+      "reason": "Open-rounds page states 'no active grant rounds at this time'; PhD Fellowship deadline was April 22, 2026 (passed). No open 2026 round to apply to."
+    },
+    {
+      "name": "Filecoin ProPGF Batch 2 \u2014 General Track",
+      "source_url": "https://filecoin.io/blog/posts/announcing-filecoin-propgf-batch-2-general-track/",
+      "classification": "EXPIRED",
+      "reason": "Application window was Nov 12\u2013Dec 23, 2025 with decisions the week of Jan 30, 2026; closed ~6 months ago despite the page lingering."
+    },
+    {
+      "name": "Gitcoin Grants 24 (GG24)",
+      "source_url": "https://gitcoin.co/campaigns/gitcoin-grants-24-gg24",
+      "classification": "EXPIRED",
+      "reason": "Main QF donation window ran Oct 14\u201328, 2025 and is closed; no GG25 round announced for 2026 yet."
+    },
+    {
+      "name": "Cardano Project Catalyst Fund14",
+      "source_url": "https://forum.cardano.org/t/catalyst-fund14-is-open-submit-your-ideas-by-aug-18/147903",
+      "classification": "EXPIRED",
+      "reason": "Fund14 idea submission closed Aug 18, 2025. Fund15 launched Nov 2025 (18.5M ADA) but its proposal-submission window could not be confirmed as open in June 2026 \u2014 held to the currency gate."
+    },
+    {
+      "name": "Kraken Bitcoin & Crypto Developer Grant Program",
+      "source_url": "https://www.kraken.com/features/grants",
+      "classification": "NOISE",
+      "reason": "Page is a historical reference; most recent listed grant was Q2 2020. No 2026 cycle, amount, or deadline."
+    },
+    {
+      "name": "Zcash Coinholder-Directed Retroactive Grants Program (Q2 2026)",
+      "source_url": "https://forum.zcashcommunity.com/t/coinholder-directed-retroactive-grants-program-q2-2026-30-day-review-period-now-open-postponed-to-q3/55701",
+      "classification": "NOISE",
+      "reason": "Retroactive-only program rewarding already-delivered work (out of scope); 30-day review period also ended June 17, 2026."
+    },
+    {
+      "name": "Web3 Foundation / Polkadot Open Source Grants",
+      "source_url": "https://github.com/w3f/Grants-Program",
+      "classification": "NOISE",
+      "reason": "Standing rolling program (up to ~$30k) continuously open for years with no specific new 2026 cycle or round to flag as 'just opened'."
+    },
+    {
+      "name": "Solana Foundation Grants Program",
+      "source_url": "https://solana.org/grants-funding",
+      "classification": "NOISE",
+      "reason": "Standing program reviewed on a rolling basis; no specific new 2026 cycle/RFP just opened \u2014 owned by the canonical grants watch."
+    },
+    {
+      "name": "rocknblock / Hashlock / InnMind '50 grants to apply in 2026' listicles",
+      "source_url": "https://rocknblock.io/blog/blockchain-ecosystem-grants-list",
+      "classification": "NOISE",
+      "reason": "Aggregator listicles with no single specific named, verifiable open program at a canonical source."
+    }
+  ]
+}

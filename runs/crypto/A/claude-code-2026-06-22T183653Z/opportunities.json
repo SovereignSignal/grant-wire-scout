@@ -1,0 +1,127 @@
+{
+  "producer": "claude-code",
+  "variant": "A",
+  "wire": "crypto",
+  "run_id": "claude-code-2026-06-22T183653ZZ",
+  "generated_at": "2026-06-22T18:44:10Z",
+  "opportunities": [
+    {
+      "name": "Stellar Community Fund \u2014 Build Award Round #45",
+      "source_url": "https://communityfund.stellar.org/awards",
+      "wire": "crypto",
+      "amount": "up to $150,000 in XLM",
+      "deadline": "2026-07-26",
+      "summary": "Apply to Stellar Community Fund Build Award round #45 for up to $150K in XLM across Open, Integration, and RFP tracks for projects building on Stellar and Soroban; submit the interest form before the July 26, 2026 submission deadline.",
+      "classification": "GRANT",
+      "fit_score": 90,
+      "fit_reason": "concrete open round, fixed deadline and amount",
+      "evidence": [
+        "https://communityfund.stellar.org/awards"
+      ],
+      "discovered_via": "web_search"
+    },
+    {
+      "name": "Filecoin Open Grants (devgrants)",
+      "source_url": "https://github.com/filecoin-project/devgrants/blob/master/Program%20Resources/Open%20Grants%20README.md",
+      "wire": "crypto",
+      "amount": "up to $50,000",
+      "deadline": "rolling",
+      "summary": "Apply for up to $50,000 to build developer/data tooling, integrations, storage, retrieval, research, or FVM projects on Filecoin; submit a proposal as a GitHub issue, with preliminary review in ~2 weeks and a final decision generally within 4 weeks.",
+      "classification": "GRANT",
+      "fit_score": 85,
+      "fit_reason": "open rolling program, clear cap and process",
+      "evidence": [
+        "https://github.com/filecoin-project/devgrants/blob/master/Program%20Resources/Open%20Grants%20README.md",
+        "https://fil.org/grants"
+      ],
+      "discovered_via": "web_search"
+    },
+    {
+      "name": "Ethereum Foundation Ecosystem Support Program (ESP)",
+      "source_url": "https://esp.ethereum.foundation/applicants",
+      "wire": "crypto",
+      "amount": "$5,000\u2013$200,000+ (determined by scope)",
+      "deadline": "rolling",
+      "summary": "Apply for non-dilutive grants (typically $5K\u2013$200K+) for open-source Ethereum infrastructure, cryptography, zero-knowledge proofs, developer tooling, education, and research; rolling Wishlist/RFP applications are reviewed within 3\u20136 weeks.",
+      "classification": "GRANT",
+      "fit_score": 84,
+      "fit_reason": "active rolling program, broad eligibility, named amount range",
+      "evidence": [
+        "https://esp.ethereum.foundation/applicants"
+      ],
+      "discovered_via": "web_search"
+    },
+    {
+      "name": "Zcash Community Grants (ZCG)",
+      "source_url": "https://zcashcommunitygrants.org/",
+      "wire": "crypto",
+      "amount": "varies; funded from a ~100,000 ZEC Major Grants pool (~$11M)",
+      "deadline": "rolling",
+      "summary": "Apply for funding from Zcash's ~100,000 ZEC Major Grants allocation (~$11M, running through the 2028 halving) to perform ongoing public-good development for the Zcash ecosystem; submit via GitHub issue template or propose against open RFPs.",
+      "classification": "GRANT",
+      "fit_score": 78,
+      "fit_reason": "open rolling program with large funded pool",
+      "evidence": [
+        "https://zcashcommunitygrants.org/",
+        "https://forum.zcashcommunity.com/c/grants/33"
+      ],
+      "discovered_via": "web_search"
+    },
+    {
+      "name": "Solana Foundation Grants",
+      "source_url": "https://solana.org/grants-funding",
+      "wire": "crypto",
+      "amount": "not specified (milestone-based; ecosystem microgrants up to ~$10k via Superteam)",
+      "deadline": "rolling",
+      "summary": "Apply for milestone-based standard or convertible grants for open-source public goods on Solana; all applications are reviewed on a rolling basis (initial assessment ~1 week, decision within ~3 weeks), open to individuals, teams, companies, nonprofits, universities, and governments.",
+      "classification": "GRANT",
+      "fit_score": 76,
+      "fit_reason": "confirmed rolling open program, amount unspecified",
+      "evidence": [
+        "https://solana.org/grants-funding"
+      ],
+      "discovered_via": "web_search"
+    },
+    {
+      "name": "Arbitrum Foundation Grant Program",
+      "source_url": "https://arbitrum.foundation/grants",
+      "wire": "crypto",
+      "amount": "not specified (milestone-based, set per project scope)",
+      "deadline": "rolling",
+      "summary": "Apply for milestone-based Arbitrum Foundation grants in the open Decentralized Applications (dApps) and Infrastructure & Tools categories; applications are approved on a rolling basis, with an alternative path to submit to the ArbitrumDAO.",
+      "classification": "GRANT",
+      "fit_score": 72,
+      "fit_reason": "confirmed open rolling categories, amount unspecified",
+      "evidence": [
+        "https://arbitrum.foundation/grants"
+      ],
+      "discovered_via": "web_search"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "Cardano Project Catalyst \u2014 Fund 15",
+      "source_url": "https://projectcatalyst.io/",
+      "classification": "EXPIRED",
+      "reason": "Fund 15 launched Nov 2025 (18.5M ADA + 250K USDM) with milestone-1 funding targeted for March 2026; source did not confirm an open proposal-submission window as of 2026-06-22, so it fails the currency gate."
+    },
+    {
+      "name": "Gitcoin Grants 24 (GG24)",
+      "source_url": "https://grants.gitcoin.co/",
+      "classification": "EXPIRED",
+      "reason": "Primary QF donation window ran Oct 14\u201328, 2025; round has concluded with only evaluation/building tails into 2026 \u2014 no open application window."
+    },
+    {
+      "name": "Optimism Retro Funding / RetroPGF",
+      "source_url": "https://gov.optimism.io/c/grants/retrofunding/46",
+      "classification": "NOISE",
+      "reason": "Retroactive program (rewards already-delivered work via badgeholder evaluation); no currently-open prospective application round with a verified deadline confirmed at source."
+    },
+    {
+      "name": "Uniswap Foundation Grants",
+      "source_url": "https://www.uniswapfoundation.org/grants",
+      "classification": "NOISE",
+      "reason": "Canonical page reads as a portfolio of past/ongoing grants; could not verify an open application window, deadline, or active 2026 cycle at source."
+    }
+  ]
+}

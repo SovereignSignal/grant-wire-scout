@@ -1,0 +1,11 @@
+{
+  "run_id": "claude-code-2026-06-22T183653Z",
+  "wire": "crypto",
+  "variant": "A",
+  "model": "claude-opus-4-1",
+  "generated_at": "2026-06-22T18:40:22.315897Z",
+  "opportunity_count": 6,
+  "avg_fit_score": 81,
+  "cost_usd": 1.5009479999999997,
+  "duration_ms": 208002
+}

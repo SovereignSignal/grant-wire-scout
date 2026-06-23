@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets / env (none committed; defensive)
+.env
+.env.*
+*.secret
+secrets/
+
+# OS / editor
+.DS_Store
+*.log

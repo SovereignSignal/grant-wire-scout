@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Claude Code Grant Producer — run output",
+  "description": "The contract a Claude Code producer run emits. Matches Wire Room scan_entries shape (name, source_url, amount, deadline, wire, classification, quality_score) plus producer-attribution metadata so the Stringer intake and the A/B split can attribute promotions per producer.",
+  "type": "object",
+  "required": ["producer", "variant", "wire", "generated_at", "opportunities"],
+  "properties": {
+    "producer": { "const": "claude-code" },
+    "variant": { "type": "string", "enum": ["A", "B"] },
+    "wire": { "type": "string", "enum": ["crypto", "ai", "oss"] },
+    "run_id": { "type": "string", "description": "claude-code-<ISO ts>Z" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "opportunities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "source_url", "wire", "amount", "deadline", "summary", "classification", "fit_score", "fit_reason", "evidence", "discovered_via"],
+        "properties": {
+          "name": { "type": "string", "description": "Program / opportunity name" },
+          "source_url": { "type": "string", "format": "uri", "description": "Canonical, source-verified URL" },
+          "wire": { "type": "string", "enum": ["crypto", "ai", "oss"] },
+          "amount": { "type": "string", "description": "Raw amount, e.g. '$45,000' / 'up to $250k' / 'not specified'" },
+          "deadline": { "type": "string", "description": "YYYY-MM-DD | 'rolling' | 'unknown'" },
+          "summary": { "type": "string", "description": "1-3 sentences, action-verb lead, key numbers" },
+          "classification": { "type": "string", "enum": ["GRANT", "EXPIRED", "NEWS", "NOISE"] },
+          "fit_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "fit_reason": { "type": "string" },
+          "evidence": { "type": "array", "items": { "type": "string" }, "description": "Verified source URLs" },
+          "discovered_via": { "type": "string", "enum": ["web_search", "web_fetch", "source_list"] }
+        }
+      }
+    },
+    "_verification_fields": {
+      "description": "Stamped by lib/verify.py after extraction (not emitted by the model): verified (bool), source_snippet (str|null), verification (object with status matched/missing/http_status/content_len). status ∈ verified|partial|unverified|fetch_failed.",
+      "verified": { "type": "boolean" }
+    },
+    "rejected": {
+      "type": "array",
+      "description": "Candidates considered but dropped, for the run report.",
+      "items": {
+        "type": "object",
+        "required": ["name", "source_url", "classification", "reason"],
+        "properties": {
+          "name": { "type": "string" },
+          "source_url": { "type": "string" },
+          "classification": { "type": "string", "enum": ["EXPIRED", "NEWS", "NOISE", "DUPLICATE"] },
+          "reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}
