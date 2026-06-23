@@ -1,0 +1,337 @@
+{
+  "producer": "claude-code",
+  "variant": "A",
+  "wire": "crypto",
+  "run_id": "claude-code-2026-06-23T190259Z",
+  "generated_at": "2026-06-23T19:09:43Z",
+  "opportunities": [
+    {
+      "name": "Avalanche Foundation Research Grants \u2014 Network Economics",
+      "source_url": "https://www.avax.network/about/blog/research-grants-avalanche-network-economics",
+      "wire": "crypto",
+      "amount": "up to $50,000 USD (paid across 3 milestones over 12 months)",
+      "deadline": "rolling",
+      "summary": "Submit a research proposal (max 10 pages) on cryptoasset pricing/valuation, validator economics, or PoS security for up to $50,000 USD. Announced April 29, 2026; reviewed on a rolling basis with disbursement across three milestones (30% on award / 30% interim / 40% on final paper). Apply at build.avax.network/grants.",
+      "classification": "GRANT",
+      "fit_score": 64,
+      "fit_reason": "fresh late-April 2026 round, open rolling, clear amount + eligibility",
+      "evidence": [
+        "https://www.avax.network/about/blog/research-grants-avalanche-network-economics"
+      ],
+      "discovered_via": "web_search",
+      "verified": true,
+      "source_snippet": "\u2026the avalanche foundation opens up to $50,000 in research g\u2026",
+      "verification": {
+        "status": "verified",
+        "matched": [
+          "$50,000",
+          "50,000",
+          "avalanche",
+          "economics"
+        ],
+        "missing": [
+          "50000",
+          "april 29"
+        ],
+        "fetched_at": "2026-06-23T19:11:55.597578Z",
+        "http_status": 200,
+        "content_len": 26741,
+        "claims": {
+          "name_words": [
+            "avalanche",
+            "economics"
+          ],
+          "amounts": [
+            "50,000",
+            "50000",
+            "$50,000"
+          ],
+          "deadlines": [
+            "april 29"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Arbitrum Audit Program ($10M)",
+      "source_url": "https://blog.arbitrum.foundation/arbitrums-10m-audit-program-is-live-apply-to-secure-your-smart-contracts/",
+      "wire": "crypto",
+      "amount": "$10M in ARB total (12-month allocation)",
+      "deadline": "rolling",
+      "summary": "Apply for subsidized smart-contract audits from Arbitrum's $10M ARB program, launched Aug 1 2025 and running ~12 months through Aug 2026. Eligible projects are early-stage on Arbitrum One or Orbit with new or significantly modified codebases (yet to launch, migrating, or already operational). The Audit Committee reviews on a rolling basis.",
+      "classification": "GRANT",
+      "fit_score": 60,
+      "fit_reason": "active bounded audit-subsidy window through Aug 2026; large pool",
+      "evidence": [
+        "https://blog.arbitrum.foundation/arbitrums-10m-audit-program-is-live-apply-to-secure-your-smart-contracts/",
+        "https://arbitrum.foundation/grants"
+      ],
+      "discovered_via": "web_search",
+      "verified": true,
+      "source_snippet": "\u2026arbitrum\u2019s $10m audit program is live: apply to secur\u2026",
+      "verification": {
+        "status": "verified",
+        "matched": [
+          "$10",
+          "10m",
+          "arbitrum",
+          "audit"
+        ],
+        "missing": [
+          "10,000,000",
+          "10000000"
+        ],
+        "fetched_at": "2026-06-23T19:11:56.853630Z",
+        "http_status": 200,
+        "content_len": 13427,
+        "claims": {
+          "name_words": [
+            "arbitrum",
+            "audit",
+            "10m"
+          ],
+          "amounts": [
+            "10,000,000",
+            "10000000",
+            "$10"
+          ],
+          "deadlines": []
+        }
+      }
+    },
+    {
+      "name": "ZKsync Community Activation Pilot \u2014 RFP Pool",
+      "source_url": "https://forum.zknation.io/t/tpp-8-zksync-community-activation-pilot-program-2025-2026/762",
+      "wire": "crypto",
+      "amount": "13.6M ZK in the competitive RFP pool (20M ZK total program)",
+      "deadline": "rolling",
+      "summary": "Respond to continuously published RFPs in ZKsync's Community Activation Pilot (Aug 27 2025\u2013Aug 27 2026), a 20M ZK program with a 13.6M ZK competitive RFP pool across four tracks: Product Marketing & Activation, Adoption Enablement, Data & Transparency, and Community Tooling. New RFPs are posted on a rolling basis on the ZK Nation governance forum.",
+      "classification": "GRANT",
+      "fit_score": 57,
+      "fit_reason": "active 2025\u20132026 pilot window; rolling RFPs published continuously",
+      "evidence": [
+        "https://forum.zknation.io/t/tpp-8-zksync-community-activation-pilot-program-2025-2026/762"
+      ],
+      "discovered_via": "web_search",
+      "verified": false,
+      "source_snippet": "\u2026[tpp-8] zksync community activation pilot program (2025\u2013202\u2026",
+      "verification": {
+        "status": "partial",
+        "matched": [
+          "activation",
+          "pilot",
+          "pool",
+          "rfp",
+          "zksync"
+        ],
+        "missing": [],
+        "fetched_at": "2026-06-23T19:11:58.379280Z",
+        "http_status": 200,
+        "content_len": 17464,
+        "claims": {
+          "name_words": [
+            "zksync",
+            "activation",
+            "pilot",
+            "rfp",
+            "pool"
+          ],
+          "amounts": [],
+          "deadlines": []
+        }
+      }
+    },
+    {
+      "name": "Sui Foundation Programs \u2014 DeFi Moonshots / Academic Research Awards / RFPs",
+      "source_url": "https://www.sui.io/programs-funding",
+      "wire": "crypto",
+      "amount": "DeFi Moonshots up to $500K in liquidity incentives; Academic Research Awards $25K; plus open RFPs",
+      "deadline": "rolling",
+      "summary": "Apply to Sui Foundation's open 2026 funding tracks: DeFi Moonshots (up to $500K in liquidity incentives plus engineering collaboration, no equity), Academic Research Awards ($25K), open Requests for Proposals, and the Hydropower accelerator. All accept applications on a rolling/ongoing basis via sui.io/programs-funding.",
+      "classification": "GRANT",
+      "fit_score": 56,
+      "fit_reason": "multiple open 2026 tracks with concrete amounts; standing/rolling",
+      "evidence": [
+        "https://www.sui.io/programs-funding"
+      ],
+      "discovered_via": "web_search",
+      "verified": false,
+      "source_snippet": "\u2026sui | programs and funding webfont.load({ google\u2026",
+      "verification": {
+        "status": "partial",
+        "matched": [
+          "academic",
+          "defi",
+          "moonshots",
+          "programs",
+          "rfps",
+          "sui"
+        ],
+        "missing": [
+          "25,000",
+          "25000",
+          "500,000",
+          "500000"
+        ],
+        "fetched_at": "2026-06-23T19:12:00.404496Z",
+        "http_status": 200,
+        "content_len": 66161,
+        "claims": {
+          "name_words": [
+            "sui",
+            "programs",
+            "defi",
+            "moonshots",
+            "academic",
+            "rfps"
+          ],
+          "amounts": [
+            "500,000",
+            "500000",
+            "25,000",
+            "25000"
+          ],
+          "deadlines": []
+        }
+      }
+    },
+    {
+      "name": "Stellar Community Fund \u2014 Build Award",
+      "source_url": "https://stellar.org/grants-and-funding",
+      "wire": "crypto",
+      "amount": "up to $150,000 in XLM",
+      "deadline": "rolling",
+      "summary": "Apply to the Stellar Community Fund Build Award for up to $150,000 in XLM to take a validated project from concept to launch on Stellar. SCF runs continuous ~6-week Build Award rounds; submit the interest form at communityfund.stellar.org to be slotted into the active round.",
+      "classification": "GRANT",
+      "fit_score": 58,
+      "fit_reason": "recurring 6-week rounds; verified $150K Build Award on canonical Stellar page",
+      "evidence": [
+        "https://stellar.org/grants-and-funding"
+      ],
+      "discovered_via": "web_search",
+      "verified": true,
+      "source_snippet": "\u2026stellar | grants and funding .hwqrmi{color:inherit;}\u2026",
+      "verification": {
+        "status": "verified",
+        "matched": [
+          "$150,000",
+          "150,000",
+          "stellar"
+        ],
+        "missing": [
+          "150000"
+        ],
+        "fetched_at": "2026-06-23T19:12:01.606987Z",
+        "http_status": 200,
+        "content_len": 136916,
+        "claims": {
+          "name_words": [
+            "stellar"
+          ],
+          "amounts": [
+            "150,000",
+            "150000",
+            "$150,000"
+          ],
+          "deadlines": []
+        }
+      }
+    },
+    {
+      "name": "Circle Developer Grants",
+      "source_url": "https://www.circle.com/grant",
+      "wire": "crypto",
+      "amount": "tiered USDC grants (amounts customized per project, not disclosed)",
+      "deadline": "rolling",
+      "summary": "Apply for USDC developer grants for teams integrating USDC, CCTP, Wallets, Gateway, and Arc into shipping products with demonstrated traction and a credible path to users/revenue. Circle references a 'first cohort of 2026'; rolling review via the Questbook portal at circle.questbook.app. Amounts are customized per project rather than published tiers.",
+      "classification": "GRANT",
+      "fit_score": 52,
+      "fit_reason": "confirmed 2026 cohort, open/rolling, but amounts undisclosed",
+      "evidence": [
+        "https://www.circle.com/grant"
+      ],
+      "discovered_via": "web_search",
+      "verified": false,
+      "source_snippet": "\u2026circle developer grants | circle !function(o,c){var\u2026",
+      "verification": {
+        "status": "partial",
+        "matched": [
+          "circle"
+        ],
+        "missing": [],
+        "fetched_at": "2026-06-23T19:12:03.209719Z",
+        "http_status": 200,
+        "content_len": 48076,
+        "claims": {
+          "name_words": [
+            "circle"
+          ],
+          "amounts": [],
+          "deadlines": []
+        }
+      }
+    }
+  ],
+  "rejected": [
+    {
+      "name": "Manta Foundation $50M EcoFund / Ecosystem Grant Program",
+      "source_url": "https://crypto.news/manta-foundation-launches-50-million-ecosystem-fund/",
+      "classification": "EXPIRED",
+      "reason": "Canonical article dated June 13, 2024; the $50M EcoFund ran one year from June 15, 2024 and closed ~June 2025. Aggregators dropped the year and surfaced it as a 'June 2026' launch."
+    },
+    {
+      "name": "Autonomys / Subspace Foundation AI3.0 Ecosystem Grants",
+      "source_url": "https://medium.com/subspace-network/ecosystem-grants-program-announced-by-the-subspace-foundation-819f5a13b5b2",
+      "classification": "NOISE",
+      "reason": "Canonical announcement dated July 21, 2025 \u2014 standing rolling program (~11 months old), no new 2026 cycle/RFP. Aggregators relabeled the same call as May/June 2026."
+    },
+    {
+      "name": "Optimism Season 9 Grants Council",
+      "source_url": "https://www.opgrants.io/seasons/current/season-9/",
+      "classification": "EXPIRED",
+      "reason": "Application window Feb 11\u2013May 20, 2026; submissions closed before run date."
+    },
+    {
+      "name": "MARA Foundation Bitcoin Community Grant",
+      "source_url": "https://bitcoinmagazine.com/news/mara-launches-bitcoin-focused-foundation",
+      "classification": "EXPIRED",
+      "reason": "$100K community-vote grant launched at Bitcoin 2026; voting closed April 29, 2026."
+    },
+    {
+      "name": "BNB Hack: AI Trading Agent Edition",
+      "source_url": "https://www.bnbchain.org/en/grants",
+      "classification": "EXPIRED",
+      "reason": "$36K hackathon ran June 3\u201321, 2026 and ended before run date."
+    },
+    {
+      "name": "Ethereum Foundation ESP RFP \u2014 Neutral DeFi Risk Intelligence Aggregator",
+      "source_url": "https://esp.ethereum.foundation/applicants/rfp",
+      "classification": "EXPIRED",
+      "reason": "RFP opened ~May 26 with reported close June 15, 2026; deadline appears passed as of June 23."
+    },
+    {
+      "name": "ETHGlobal New York 2026 (June claim)",
+      "source_url": "https://cryptobriefing.com/ethglobal-nyc-hackathon-june-2026/",
+      "classification": "NOISE",
+      "reason": "Canonical ethglobal.com/events lists no NYC 2026 (only Lisbon Jul 24\u201326, ETHOnline, Tokyo, Mumbai); NY 2025 is past. Unverifiable at source."
+    },
+    {
+      "name": "Web3 Foundation Grants Program",
+      "source_url": "https://grants.web3.foundation/",
+      "classification": "NOISE",
+      "reason": "Foundation discontinued the general Grants Program; not accepting new applications."
+    },
+    {
+      "name": "Solana Foundation Grants",
+      "source_url": "https://solana.org/grants-funding",
+      "classification": "NOISE",
+      "reason": "Standing rolling program; no specific new 2026 cycle/RFP just opened \u2014 owned by the canonical grants watch."
+    },
+    {
+      "name": "Crypto grant listicles (rocknblock / Hashlock / InnMind / coinlaunch / AlphaGrowth)",
+      "source_url": "https://rocknblock.io/blog/blockchain-ecosystem-grants-list",
+      "classification": "NOISE",
+      "reason": "SEO grant-directory listicles with no single named, verifiable open program at a canonical source."
+    }
+  ]
+}

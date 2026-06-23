@@ -37,7 +37,13 @@ def main(raw_path: str, out_json: str) -> int:
     raw = json.loads(Path(raw_path).read_text())
     if raw.get("is_error"):
         raise SystemExit(f"claude run errored: {raw.get('api_error_status')}")
-    payload = coerce_payload(raw.get("result", ""))
+    # Accept either shape: the `claude -p` envelope (payload under .result, as Opus
+    # emits) OR the bare payload written straight to stdout (observed with Sonnet).
+    # The producer must not depend on the model's stdout-envelope shape.
+    if "opportunities" in raw and "producer" in raw:
+        payload = raw
+    else:
+        payload = coerce_payload(raw.get("result", ""))
     for k in ("producer", "variant", "wire", "opportunities"):
         if k not in payload:
             raise SystemExit(f"payload missing required key '{k}'")
