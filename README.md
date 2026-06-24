@@ -89,7 +89,7 @@ per-run choice; the Hermes cron job should pin Sonnet.
    and have the Stringer ingest the `claude-code` cohort directly (no Notion writes).
 
 Once unblocked: add a Hermes cron job (clone of the intake job) firing
-`run-producer.sh --model claude-sonnet-4-5` per wire at ~04:00 UTC, ahead of the 12:00
+`run-producer.sh --model claude-sonnet-4-6` per wire at ~04:00 UTC, ahead of the 12:00
 intake. The Stringer's weekly cron-review job will then observe it like every other job.
 
 ## Status

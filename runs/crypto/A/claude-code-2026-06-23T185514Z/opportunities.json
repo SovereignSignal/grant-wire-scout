@@ -34,7 +34,7 @@
           "8000000",
           "january 20"
         ],
-        "fetched_at": "2026-06-23T19:16:37.922173Z",
+        "fetched_at": "2026-06-23T19:36:08.952145Z",
         "http_status": 200,
         "content_len": 102931,
         "claims": {
@@ -84,7 +84,7 @@
         "missing": [
           "680000"
         ],
-        "fetched_at": "2026-06-23T19:16:39.301483Z",
+        "fetched_at": "2026-06-23T19:36:10.259954Z",
         "http_status": 200,
         "content_len": 17464,
         "claims": {
@@ -133,7 +133,7 @@
           "10000000",
           "subsidy"
         ],
-        "fetched_at": "2026-06-23T19:16:44.854667Z",
+        "fetched_at": "2026-06-23T19:36:12.578021Z",
         "http_status": 200,
         "content_len": 9345,
         "claims": {
@@ -178,7 +178,7 @@
           "25,000,000",
           "25000000"
         ],
-        "fetched_at": "2026-06-23T19:16:46.079953Z",
+        "fetched_at": "2026-06-23T19:36:13.785675Z",
         "http_status": 200,
         "content_len": 12426,
         "claims": {
@@ -223,7 +223,7 @@
           "500,000",
           "500000"
         ],
-        "fetched_at": "2026-06-23T19:16:47.302490Z",
+        "fetched_at": "2026-06-23T19:36:15.213453Z",
         "http_status": 200,
         "content_len": 66161,
         "claims": {
@@ -268,7 +268,7 @@
         "missing": [
           "50000"
         ],
-        "fetched_at": "2026-06-23T19:16:48.669932Z",
+        "fetched_at": "2026-06-23T19:36:16.552241Z",
         "http_status": 200,
         "content_len": 26741,
         "claims": {
@@ -314,7 +314,7 @@
           "1000000",
           "500000"
         ],
-        "fetched_at": "2026-06-23T19:16:49.915636Z",
+        "fetched_at": "2026-06-23T19:36:17.829381Z",
         "http_status": 200,
         "content_len": 142755,
         "claims": {

@@ -2,7 +2,7 @@
 # run-producer.sh — invoke the Claude Code grant producer for one wire+variant.
 #
 # Usage:
-#   ./run-producer.sh --wire crypto --variant A [--model claude-opus-4-1]
+#   ./run-producer.sh --wire crypto --variant A [--model claude-opus-4-8]
 #
 # What it does:
 #   1. Renders prompts/producer.md with wire/variant/source-list substitutions.
@@ -13,8 +13,8 @@
 #
 # Environment:
 #   CLAUDE          claude binary (default: claude)
-#   MODEL           default model (default: claude-opus-4-1 — top-of-line for the
-#                    hard source-verify + currency-gate work)
+#   MODEL           default model (default: claude-sonnet-4-6 — cheap+capable for
+#                    scheduled discovery; override to claude-opus-4-8 for high-value runs)
 #   WIRE_ROOM_API   base URL of wire-room-ops (for dedup; optional)
 #   INTERNAL_API_KEY  wire-room-ops internal key (for dedup; optional)
 
@@ -22,7 +22,7 @@ set -euo pipefail
 
 WIRE=""
 VARIANT="A"
-MODEL="${MODEL:-claude-opus-4-1}"
+MODEL="${MODEL:-claude-sonnet-4-6}"
 CLAUDE="${CLAUDE:-claude}"
 PRODUCER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
