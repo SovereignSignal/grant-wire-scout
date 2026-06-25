@@ -56,7 +56,15 @@ programs.
    to {{WIRE}}.
 
 ## Output — STRICT JSON ONLY
-Return ONE JSON object, no prose, no markdown code fences. Shape:
+Return ONE JSON object, no prose, no markdown code fences.
+
+**CRITICAL — COMPLETE JSON, NO ABBREVIATION:** Write every object and every field out in
+full. NEVER use `...` / ellipsis anywhere — not in URLs, not between fields, not inside the
+array — and never truncate, summarize, or omit a field with a placeholder. Write every URL
+in full. Returning FEWER but COMPLETE entries is required; a single `...` breaks the parser
+and the entire run is lost.
+
+Shape:
 
 {
   "producer": "claude-code",
