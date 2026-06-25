@@ -51,7 +51,7 @@ def main():
          f"⚠️ Grant Wire Scout SILENT — 0 entries in {hours:g}h"],
         input=(f"No scan_source='{SOURCE}' rows reached the Wire Room queue in the last {hours:g}h. "
                f"The scout cron may be down, or the claude OAuth token may have expired "
-               f"(re-run `claude setup-token` and redeploy the credential to the Railway volume)."),
+               f"(re-run `claude setup-token` and update CLAUDE_CODE_OAUTH_TOKEN on the scout service)."),
         text=True,
     )
     print(f"heartbeat: ALERT — 0 '{SOURCE}' entries in {hours:g}h", file=sys.stderr)
