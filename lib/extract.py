@@ -24,13 +24,19 @@ def coerce_payload(result_text: str) -> dict:
     if s.startswith("```"):  # strip fences if the model added them despite instructions
         s = re.sub(r"^```(?:json)?\s*", "", s)
         s = re.sub(r"\s*```$", "", s)
+    # Defensive: models sometimes abbreviate with standalone `...` lines or leave a
+    # trailing comma; strip both so one stray ellipsis doesn't lose the whole run.
+    def _loads(text: str) -> dict:
+        text = re.sub(r"(?m)^\s*\.\.\.\s*,?\s*$", "", text)   # drop standalone ellipsis lines
+        text = re.sub(r",(\s*[}\]])", r"\1", text)            # drop trailing commas
+        return json.loads(text)
     try:
-        return json.loads(s)
+        return _loads(s)
     except json.JSONDecodeError:
         m = re.search(r"\{.*\}", s, re.DOTALL)  # fallback: outermost {...} block
         if not m:
             raise ValueError(f"no JSON object found in result (len={len(result_text)})")
-        return json.loads(m.group(0))
+        return _loads(m.group(0))
 
 
 def main(raw_path: str, out_json: str) -> int:
