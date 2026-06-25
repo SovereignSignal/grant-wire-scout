@@ -1,0 +1,11 @@
+# Scout cron service (the default config Railway reads at the repo root).
+# Attach a Railway VOLUME to this service mounted at /app/home/.claude to persist the
+# claude OAuth credential. The heartbeat is a SECOND service using railway.heartbeat.toml.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "bin/run-all.sh"
+cronSchedule = "0 4 * * *"
+restartPolicyType = "NEVER"

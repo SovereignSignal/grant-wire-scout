@@ -13,3 +13,6 @@ secrets/
 # OS / editor
 .DS_Store
 *.log
+
+# keep the template (the .env.* rule above would hide it)
+!.env.example

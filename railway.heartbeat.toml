@@ -1,0 +1,12 @@
+# Heartbeat cron service — the dead-man's-switch.
+# Create a SECOND Railway service from this same repo and set its "Config file path"
+# (Settings -> Config-as-code) to railway.heartbeat.toml. Needs DATABASE_URL + the Resend
+# alert vars; no volume needed (it never calls claude).
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python3 lib/heartbeat.py"
+cronSchedule = "0 14 * * *"
+restartPolicyType = "NEVER"

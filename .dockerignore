@@ -1,0 +1,10 @@
+.git
+runs/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.local
+.DS_Store
+*.log

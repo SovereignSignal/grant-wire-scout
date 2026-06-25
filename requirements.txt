@@ -1,0 +1,2 @@
+# Only the heartbeat (lib/heartbeat.py) needs a DB driver; everything else is stdlib.
+psycopg2-binary>=2.9
