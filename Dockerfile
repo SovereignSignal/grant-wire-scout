@@ -15,12 +15,12 @@ RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 COPY . .
 RUN chmod +x bin/*.sh
 
-# The OAuth credential from `claude setup-token` lives on a Railway VOLUME mounted at
-# $HOME/.claude, so it persists and refreshes in place across runs. HOME must be writable.
+# Auth is the CLAUDE_CODE_OAUTH_TOKEN env var (from `claude setup-token`) — no volume needed.
+# Set HOME to a writable path so the claude CLI can write its config/cache.
 ENV HOME=/app/home
 RUN mkdir -p "$HOME/.claude"
 
 # Overridden per Railway service:
-#   scout cron     -> bin/run-all.sh           (cronSchedule "0 4 * * *", volume at /app/home/.claude)
-#   heartbeat cron -> python3 lib/heartbeat.py (cronSchedule "0 14 * * *", no volume)
+#   scout cron     -> bin/run-all.sh           (cronSchedule "0 4 * * *")
+#   heartbeat cron -> python3 lib/heartbeat.py (cronSchedule "0 14 * * *")
 CMD ["bin/run-all.sh"]
