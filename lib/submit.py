@@ -68,7 +68,11 @@ def main(opps_path, wire, variant, scan_date, api_base=None):
     req = urllib.request.Request(
         f"{api_base}/api/scan/submit",
         data=body,
-        headers={"Authorization": f"Bearer {internal_key}", "Content-Type": "application/json"},
+        headers={
+            "Authorization": f"Bearer {internal_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "grant-wire-scout/1.0",  # avoid edge/WAF 403s on the default urllib UA
+        },
         method="POST",
     )
     # cert-verifying TLS + no redirect following (the key never leaves the intended host)

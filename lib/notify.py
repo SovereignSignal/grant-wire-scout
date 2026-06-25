@@ -34,7 +34,13 @@ def send(subject, body):
     req = urllib.request.Request(
         "https://api.resend.com/emails",
         data=payload,
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        # A real User-Agent is REQUIRED: Resend sits behind Cloudflare, which 403s the
+        # default "Python-urllib/3.x" UA as bot traffic before auth is even evaluated.
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "User-Agent": "grant-wire-scout/1.0",
+        },
         method="POST",
     )
     try:
