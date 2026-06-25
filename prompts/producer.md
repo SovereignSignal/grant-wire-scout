@@ -16,14 +16,20 @@ Today is {{TODAY}}.
 ## Variant
 {{VARIANT}} — {{VARIANT_RULES}}
 
-## What counts (in scope) — DISCOVERY, not a canonical catalog
-**Freshly actionable** {{WIRE}} funding opportunities: a grant round/cohort/RFP that
-just OPENED or was ANNOUNCED within roughly the last 60 days; a new deadline-bound
-window; a relaunch or new cycle of an existing program. Each item MUST be open now or
-imminently (future deadline, or rolling/always-open WITH evidence of a new 2026 cycle).
-The goal is to surface what is NEW and actionable THIS WEEK — the kind of thing a
-funding tracker would flag as "just opened" — not a standing catalog of always-open
-programs.
+## What counts (in scope) — VALUABLE finds, not a canonical catalog
+**VALUABLE, NEWSWORTHY** {{WIRE}} funding opportunities — what is worth flagging in a
+weekly wire. Hunt hardest for finds that hit one or more of these (most valuable first):
+1. **Genuinely fresh** — announced or opened in roughly the last 2 weeks (the "just
+   dropped" finds), or a brand-new round / cohort / RFP of any program.
+2. **Niche / lesser-known** — smaller or under-covered programs the audience likely has
+   not already seen. The non-obvious finds are the whole point.
+3. **Deadline-bound / time-sensitive** — a specific closing date, cohort, or window
+   (hackathons, RFP windows, application deadlines) where timing matters.
+4. **Big / high-signal** — large amounts or marquee capital movements worth surfacing.
+Each item MUST be open now or imminently (future deadline, or genuinely rolling with a
+2026 sign of life). The famous, well-known standing programs that every grants tracker
+already lists are the LEAST valuable thing you can return — score them low and let the
+fresher / nichier finds take the slots.
 
 ## What does NOT count (reject these)
 - CLOSED / expired / past deadlines → classify EXPIRED, move to `rejected`.
@@ -36,13 +42,20 @@ programs.
 - Anything you cannot ground in a real canonical source URL you have fetched.
 
 ## Method (do this exactly, in order)
-1. **Discover (recency-first).** Use WebSearch to find {{WIRE}} funding opportunities
-   that OPENED or were ANNOUNCED in roughly the last 60 days. Use recency-tilted
-   queries: "new {{WIRE}} grant 2026", "{{WIRE}} RFP open", "{{WIRE}} grant round open
-   2026", "deadline {{WIRE}} funding 2026". Favor DISCOVERY SURFACES — ecosystem grant
-   forums, DAO proposal spaces, hackathon/bounty boards, foundation announcement feeds —
-   over standing grant landing pages. Trust domains for verification:
-   {{SOURCE_DOMAINS}}
+1. **Discover (hunt fresh + niche; dig past the obvious).** Run MANY targeted
+   WebSearches — do NOT stop at the first prominent results, which are the famous
+   standing programs everyone already knows. Tilt hard toward RECENCY and NOVELTY:
+   - Recency queries: "{{WIRE}} grant announced 2026", "new {{WIRE}} RFP open",
+     "{{WIRE}} funding just launched", "{{WIRE}} grant deadline 2026" — and bias every
+     search toward results dated within ~2 weeks of {{TODAY}}.
+   - Surfaces where NEW and NICHE grants actually break (favor these over standing
+     /grants landing pages): DAO governance (Snapshot, Tally, Commonwealth, ecosystem
+     forums), hackathon & bounty boards (DoraHacks, Devpost, Gitcoin), foundation
+     announcement BLOGS and X/Twitter posts, and grant-news feeds — use these as LEADS,
+     then verify at the canonical source.
+   - Actively chase the under-covered: smaller ecosystems, new protocols, just-launched
+     programs — not the handful of big foundations everyone already tracks.
+   Trust domains for verification: {{SOURCE_DOMAINS}}
 2. **Verify at source.** For every candidate, use WebFetch on its canonical URL to
    confirm: the program exists, is currently open, and you can see the amount and
    deadline. Do NOT emit any item you have not fetched and confirmed at the source.
@@ -50,10 +63,12 @@ programs.
    with a past deadline, or showing no sign of 2026 activity. When in doubt, fetch
    the page and check dates explicitly.
 4. **Dedup.** Drop repeat source URLs within this run.
-5. **Score fit** 0–100. Weight NEWNESS highest: how recently it opened/was announced
-   (a brand-new 2026 round scores higher than a years-old rolling page). Then
-   actionability, completeness (amount + deadline + eligibility present), and relevance
-   to {{WIRE}}.
+5. **Score fit** 0–100 BY VALUE, and name the value dimension(s) it hits in `fit_reason`
+   (fresh / niche / deadline / big-signal). Weight freshness highest (announced in the
+   last ~2 weeks tops the scale), then novelty (niche & under-covered beats
+   famous-and-known), deadline urgency, and signal size. A well-known standing program
+   with nothing new scores LOW (≤ ~55) even when open. Then actionability and
+   completeness (amount + deadline + eligibility present), and relevance to {{WIRE}}.
 
 ## Output — STRICT JSON ONLY
 Return ONE JSON object, no prose, no markdown code fences.
