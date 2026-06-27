@@ -8,13 +8,33 @@ URL is present. Writes the filtered set back in place.
 Normalization matches Wire Room's (utils/url.ts normalizeUrl): lowercased host,
 stripped scheme/www/trailing slash, dropped query/fragment.
 
-Usage: dedup.py <opportunities.json> <wire> <api_base> <internal_api_key>
+Security (the internal key is a real credential, treat it like one):
+  - INTERNAL_API_KEY is read from the ENVIRONMENT ONLY — never a CLI arg, so it can't
+    leak into `ps`/argv or shell history.
+  - Transport is forced to HTTPS with certificate verification (no plaintext key).
+  - HTTP redirects are REFUSED, so the Authorization header is never replayed to another host.
+
+Usage: dedup.py <opportunities.json> <wire> [api_base]
+       (api_base falls back to $WIRE_ROOM_API; INTERNAL_API_KEY is env-only)
 """
 import json
+import os
 import re
+import ssl
 import sys
 import urllib.parse
+import urllib.request
+import urllib.error
 from pathlib import Path
+from urllib.parse import urlparse
+
+
+class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects. urllib re-sends request headers (incl. Authorization) on a
+    3xx, so a redirect to another host would leak the internal key. The seen-urls endpoint
+    never legitimately redirects, so we treat any 3xx as a fetch failure."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"refusing redirect to {newurl!r}", headers, fp)
 
 
 def normalize_url(u: str) -> str:
@@ -30,10 +50,14 @@ def normalize_url(u: str) -> str:
 
 
 def fetch_seen(api_base: str, wire: str, key: str) -> set[str]:
-    import urllib.request
     url = f"{api_base.rstrip('/')}/api/scan/seen-urls?wire={urllib.parse.quote(wire)}&limit=500"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
-    with urllib.request.urlopen(req, timeout=30) as r:
+    # cert-verifying TLS + no redirect following (the key never leaves the intended host)
+    opener = urllib.request.build_opener(
+        _RefuseRedirect,
+        urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+    )
+    with opener.open(req, timeout=30) as r:
         data = json.load(r)
     seen = data.get("urls") or data.get("items") or []
     out = set()
@@ -44,7 +68,20 @@ def fetch_seen(api_base: str, wire: str, key: str) -> set[str]:
     return out
 
 
-def main(opp_path: str, wire: str, api_base: str, key: str) -> int:
+def main(opp_path: str, wire: str, api_base: str = None) -> int:
+    api_base = (api_base or os.environ.get("WIRE_ROOM_API", "")).rstrip("/")
+    key = os.environ.get("INTERNAL_API_KEY", "")  # env-only, never argv
+    if not api_base or not key:
+        print("dedup: WIRE_ROOM_API (arg or env) and INTERNAL_API_KEY (env) are required", file=sys.stderr)
+        return 2
+
+    parsed = urlparse(api_base)
+    is_local = (parsed.hostname or "") in ("localhost", "127.0.0.1", "::1")
+    if parsed.scheme != "https" and not is_local:
+        print(f"dedup: refusing to send the internal key over '{parsed.scheme or 'unknown'}://' — "
+              f"WIRE_ROOM_API must be https:// (got {api_base})", file=sys.stderr)
+        return 2
+
     payload = json.loads(Path(opp_path).read_text())
     opps = payload.get("opportunities", [])
     seen = fetch_seen(api_base, wire, key)
@@ -63,6 +100,6 @@ def main(opp_path: str, wire: str, api_base: str, key: str) -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        raise SystemExit("usage: dedup.py <opportunities.json> <wire> <api_base> <internal_api_key>")
+    if len(sys.argv) < 3:
+        raise SystemExit("usage: dedup.py <opportunities.json> <wire> [api_base]  (INTERNAL_API_KEY is env-only)")
     sys.exit(main(*sys.argv[1:]))

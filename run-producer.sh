@@ -110,7 +110,7 @@ python3 "${PRODUCER_ROOT}/lib/report.py" "$RUN_DIR/opportunities.json" "$RUN_DIR
 # --- optional: dedup against Wire Room seen-URLs (only if API configured) ---
 if [[ -n "${WIRE_ROOM_API:-}" && -n "${INTERNAL_API_KEY:-}" ]]; then
   echo "[producer] deduping against Wire Room seen-URLs…"
-  python3 "${PRODUCER_ROOT}/lib/dedup.py" "$RUN_DIR/opportunities.json" "${WIRE}" "${WIRE_ROOM_API}" "${INTERNAL_API_KEY}" \
+  python3 "${PRODUCER_ROOT}/lib/dedup.py" "$RUN_DIR/opportunities.json" "${WIRE}" "${WIRE_ROOM_API}" \
     || echo "[producer] dedup skipped (API error) — full set retained"
 fi
 
