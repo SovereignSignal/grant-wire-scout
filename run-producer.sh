@@ -101,11 +101,14 @@ RAW_JSON="$RUN_DIR/raw.json"
 python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.json"
 
 # --- self-prove: re-fetch each source_url and confirm the claimed facts are on the page ---
+# NON-FATAL: verification is a diagnostic; it must never block delivery of finds (C2).
 echo "[producer] verifying sources…"
-python3 "${PRODUCER_ROOT}/lib/verify.py" "$RUN_DIR/opportunities.json"
+python3 "${PRODUCER_ROOT}/lib/verify.py" "$RUN_DIR/opportunities.json" \
+  || echo "[producer] verify failed (non-fatal) — continuing"
 
-# --- re-render the report so it reflects verification status ---
-python3 "${PRODUCER_ROOT}/lib/report.py" "$RUN_DIR/opportunities.json" "$RUN_DIR/report.md" "$RAW_JSON"
+# --- re-render the report so it reflects verification status (NON-FATAL diagnostic) ---
+python3 "${PRODUCER_ROOT}/lib/report.py" "$RUN_DIR/opportunities.json" "$RUN_DIR/report.md" "$RAW_JSON" \
+  || echo "[producer] report failed (non-fatal) — continuing"
 
 # --- optional: dedup against Wire Room seen-URLs (only if API configured) ---
 if [[ -n "${WIRE_ROOM_API:-}" && -n "${INTERNAL_API_KEY:-}" ]]; then
@@ -127,7 +130,8 @@ if os.path.exists(opps_path):
         n = len(opps)
         if opps: score_avg = round(sum(o.get("fit_score",0) for o in opps)/len(opps))
     except Exception: pass
-raw = json.load(open(os.path.join(run_dir, "raw.json"))) if os.path.exists(os.path.join(run_dir,"raw.json")) else {}
+try: raw = json.load(open(os.path.join(run_dir, "raw.json"))) if os.path.exists(os.path.join(run_dir,"raw.json")) else {}
+except Exception: raw = {}
 print(json.dumps({
   "run_id": run_id, "wire": wire, "variant": variant, "model": model,
   "generated_at": datetime.datetime.utcnow().isoformat()+"Z",

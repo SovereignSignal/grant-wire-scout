@@ -51,10 +51,10 @@ def fetch(url: str, timeout: int) -> tuple[int, str]:
 
 def claim_tokens(opp: dict) -> dict:
     """Extract concrete, checkable claims from an opportunity."""
-    name = opp.get("name", "")
-    amount = opp.get("amount", "")
-    deadline = opp.get("deadline", "")
-    summary = opp.get("summary", "")
+    name = str(opp.get("name") or "")
+    amount = str(opp.get("amount") or "")
+    deadline = str(opp.get("deadline") or "")
+    summary = str(opp.get("summary") or "")
 
     # Name tokens: distinctive words from the program name (skip generic words)
     STOP = {
@@ -119,7 +119,7 @@ def find_snippet(page: str, needles: list, window: int = 90):
 
 
 def verify_one(opp: dict, timeout: int) -> dict:
-    url = opp.get("source_url", "")
+    url = str(opp.get("source_url") or "")
     claims = claim_tokens(opp)
     result = {
         "status": "fetch_failed", "matched": [], "missing": [],
@@ -159,7 +159,7 @@ def verify_one(opp: dict, timeout: int) -> dict:
     name_ok = len(name_hits) >= max(1, len(claims["name_words"]) // 2) if claims["name_words"] else True
     # Fact corroboration: amount OR deadline should appear (rolling/no-amount items exempt).
     fact_ok = bool(amount_hits or deadline_hits) or (
-        opp.get("amount", "").lower() in ("not specified", "rolling", "unknown", "")
+        str(opp.get("amount") or "").lower() in ("not specified", "rolling", "unknown", "")
     )
 
     if name_ok and fact_ok:
@@ -181,7 +181,15 @@ def main(opp_path: str, timeout: int, delay: float) -> int:
     opps = payload.get("opportunities", [])
     counts = {"verified": 0, "partial": 0, "unverified": 0, "fetch_failed": 0}
     for o in opps:
-        verify_one(o, timeout)
+        try:
+            verify_one(o, timeout)
+        except Exception as e:
+            o.update(verified=False, source_snippet=None, verification={
+                "status": "fetch_failed", "error": type(e).__name__,
+                "matched": [], "missing": [],
+                "fetched_at": datetime.datetime.utcnow().isoformat() + "Z",
+                "http_status": None, "content_len": 0,
+            })
         counts[o["verification"]["status"]] = counts.get(o["verification"]["status"], 0) + 1
         time.sleep(delay)  # be polite
     Path(opp_path).write_text(json.dumps(payload, indent=2))
