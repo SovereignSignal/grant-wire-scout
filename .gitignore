@@ -1,3 +1,6 @@
+# Local producer run artifacts — ephemeral, regenerated each run, never committed.
+runs/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -177,7 +177,16 @@ def salvage_payload(result_text: str) -> dict:
 
 
 def main(raw_path: str, out_json: str) -> int:
-    raw = json.loads(Path(raw_path).read_text())
+    raw_text = Path(raw_path).read_text()
+    try:
+        raw = json.loads(raw_text)
+    except json.JSONDecodeError:
+        # The raw file ITSELF is malformed/truncated — happens with the bare-payload
+        # shape (the model wrote the payload straight to stdout and it was cut off mid
+        # output). Don't abort the whole run: salvage opportunities from the raw text.
+        payload = salvage_payload(raw_text)
+        Path(out_json).write_text(json.dumps(payload, indent=2))
+        return 0
     if raw.get("is_error"):
         raise SystemExit(f"claude run errored: {raw.get('api_error_status')}")
     # Accept either shape: the `claude -p` envelope (payload under .result, as Opus
