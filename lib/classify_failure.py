@@ -20,10 +20,24 @@ def classify(raw_path):
         return "OTHER"
 
     blob = " ".join(str(d.get(k) or "") for k in ("api_error_status", "result", "subtype", "error")).lower()
-    if any(s in blob for s in ("401", "403", "unauthor", "forbidden", "oauth", "token", "authentication", "credential", "setup-token", "login")):
-        return "AUTH"
-    if any(s in blob for s in ("429", "rate limit", "rate_limit", "usage limit", "quota", "overloaded", "capacity", "exceeded")):
+    # QUOTA (genuine usage/rate signals) is checked BEFORE AUTH so a quota failure
+    # wins even when its message also mentions tokens.
+    if any(s in blob for s in (
+        "429", "rate limit", "rate_limit", "usage limit", "quota", "overloaded", "capacity",
+    )):
         return "QUOTA"
+    # Output truncation (the model hit its output/context token ceiling → truncated,
+    # unparseable JSON) is "no usable output" — NOT a billing cap and NOT an auth issue.
+    # Route to EMPTY so the alert reads honestly instead of "Max usage cap hit".
+    if any(s in blob for s in ("max tokens", "maximum output tokens", "context length", "token limit")):
+        return "EMPTY"
+    # AUTH matches only genuine authentication signals — never the bare word "token".
+    if any(s in blob for s in (
+        "401", "403", "unauthor", "forbidden", "oauth", "authentication", "credential",
+        "setup-token", "invalid api key", "login",
+        "invalid token", "expired token", "token expired",
+    )):
+        return "AUTH"
     if d.get("is_error"):
         return "OTHER"
     # exited non-zero but no error envelope and nothing usable produced → empty/parse failure
