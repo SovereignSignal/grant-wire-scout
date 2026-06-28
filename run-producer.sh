@@ -102,6 +102,7 @@ RAW_JSON="$RUN_DIR/raw.json"
   --output-format json \
   --permission-mode acceptEdits \
   --allowedTools "WebSearch" "WebFetch" \
+  --max-turns "${SCOUT_MAX_TURNS:-100}" \
   > "$RAW_JSON"
 
 # --- extract the producer payload (the model's `result` text holds our JSON object) ---
