@@ -103,7 +103,8 @@ python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.js
 # --- self-prove: re-fetch each source_url and confirm the claimed facts are on the page ---
 # NON-FATAL: verification is a diagnostic; it must never block delivery of finds (C2).
 echo "[producer] verifying sources…"
-python3 "${PRODUCER_ROOT}/lib/verify.py" "$RUN_DIR/opportunities.json" \
+env -u INTERNAL_API_KEY -u RESEND_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN -u ALERT_FROM -u NOTIFICATION_EMAIL \
+  python3 "${PRODUCER_ROOT}/lib/verify.py" "$RUN_DIR/opportunities.json" \
   || echo "[producer] verify failed (non-fatal) — continuing"
 
 # --- re-render the report so it reflects verification status (NON-FATAL diagnostic) ---

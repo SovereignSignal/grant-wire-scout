@@ -23,11 +23,15 @@ Usage: verify.py <opportunities.json> [--timeout 15] [--delay 1.0]
 """
 import argparse
 import datetime
+import ipaddress
 import json
 import re
+import socket
+import ssl
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -42,9 +46,61 @@ def normalize_text(s: str) -> str:
     return re.sub(r"\s+", " ", s).lower()
 
 
+def _assert_safe_url(url):
+    """Raise urllib.error.URLError if url is unsafe for fetching (SSRF guard).
+
+    Strict: only http/https, host required, and EVERY resolved address must be a
+    public/global unicast address (rejects private/loopback/link-local (incl.
+    169.254.169.254 metadata)/reserved/multicast/unspecified, IPv4 and IPv6).
+    Unresolvable hosts are treated as unsafe.
+    """
+    parsed = urllib.parse.urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        raise urllib.error.URLError("blocked scheme: %r" % scheme)
+
+    host = parsed.hostname
+    if not host:
+        raise urllib.error.URLError("missing host in url")
+
+    port = parsed.port
+    if port is None:
+        port = 443 if scheme == "https" else 80
+
+    try:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as e:
+        raise urllib.error.URLError("unresolvable host: %s" % e)
+
+    if not infos:
+        raise urllib.error.URLError("unresolvable host: no addresses")
+
+    for info in infos:
+        sockaddr = info[4]
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError as e:
+            raise urllib.error.URLError("unparseable address: %s" % e)
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise urllib.error.URLError("blocked non-public address: %s" % ip_str)
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _assert_safe_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch(url: str, timeout: int) -> tuple[int, str]:
+    _assert_safe_url(url)
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html,*/*"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    opener = urllib.request.build_opener(
+        _SafeRedirectHandler(),
+        urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+    )
+    with opener.open(req, timeout=timeout) as r:
         body = r.read(2_000_000).decode("utf-8", errors="replace")  # cap at 2MB/page
         return r.status, normalize_text(body)
 
