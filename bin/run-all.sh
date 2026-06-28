@@ -16,11 +16,18 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   exit 0
 fi
 
-VARIANT="${SCOUT_VARIANT:-A}"
+# A/B experiment: run BOTH variants per wire so promotion rates are comparable downstream.
+# The Wire Room stores prompt_variant per entry, so A vs B is scorable (see bin/ab-score.sh).
+# SCOUT_VARIANTS overrides; a legacy single SCOUT_VARIANT is still honored. NOTE: two variants
+# DOUBLES the per-wire cost — each run is bounded by the producer wall-clock timeout +
+# SCOUT_MAX_TURNS. Set SCOUT_VARIANTS=A to run a single arm.
+VARIANTS="${SCOUT_VARIANTS:-${SCOUT_VARIANT:-A B}}"
 WIRES="${SCOUT_WIRES:-crypto ai oss}"
 
 rc=0
 for w in $WIRES; do
-  "$ROOT/bin/run-scout.sh" "$w" "$VARIANT" || rc=1
+  for v in $VARIANTS; do
+    "$ROOT/bin/run-scout.sh" "$w" "$v" || rc=1
+  done
 done
 exit "$rc"
