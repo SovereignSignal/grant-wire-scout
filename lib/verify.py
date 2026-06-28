@@ -46,6 +46,20 @@ def normalize_text(s: str) -> str:
     return re.sub(r"\s+", " ", s).lower()
 
 
+def _ip_is_blocked(ip_str) -> bool:
+    """Return True if ip_str is a non-public address (or unparseable).
+
+    Blocks private/loopback/link-local (incl. 169.254.169.254 metadata)/reserved/
+    multicast/unspecified, IPv4 and IPv6. Unparseable inputs are treated as blocked.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
 def _assert_safe_url(url):
     """Raise urllib.error.URLError if url is unsafe for fetching (SSRF guard).
 
@@ -78,12 +92,7 @@ def _assert_safe_url(url):
     for info in infos:
         sockaddr = info[4]
         ip_str = sockaddr[0]
-        try:
-            ip = ipaddress.ip_address(ip_str)
-        except ValueError as e:
-            raise urllib.error.URLError("unparseable address: %s" % e)
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+        if _ip_is_blocked(ip_str):
             raise urllib.error.URLError("blocked non-public address: %s" % ip_str)
 
 
@@ -101,6 +110,15 @@ def fetch(url: str, timeout: int) -> tuple[int, str]:
         urllib.request.HTTPSHandler(context=ssl.create_default_context()),
     )
     with opener.open(req, timeout=timeout) as r:
+        # Post-connect peer check: closes the DNS-rebinding residual. urllib re-resolves
+        # on connect, so a low-TTL host can pass pre-connect validation as public then
+        # connect to a private IP. Re-validate the ACTUAL connected peer before reading.
+        try:
+            peer_ip = r.fp.raw._sock.getpeername()[0]
+        except Exception:
+            peer_ip = None
+        if peer_ip is not None and _ip_is_blocked(peer_ip):
+            raise urllib.error.URLError(f"post-connect peer not public: {peer_ip}")
         body = r.read(2_000_000).decode("utf-8", errors="replace")  # cap at 2MB/page
         return r.status, normalize_text(body)
 
