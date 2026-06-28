@@ -19,8 +19,12 @@ alert() { python3 "$ROOT/lib/notify.py" "$1" || echo "[run-scout] ALERT SEND FAI
 # 1. discover -> verify -> report
 out="$("$ROOT/run-producer.sh" --wire "$WIRE" --variant "$VARIANT" --model "$MODEL" 2>&1)"; rc=$?
 printf '%s\n' "$out"
-run_dir="$(ls -dt "$ROOT/runs/$WIRE/$VARIANT"/*/ 2>/dev/null | head -1)"
+run_dir="$(printf '%s\n' "$out" | sed -n 's/^RUN_DIR=//p' | tail -1)"
 run_dir="${run_dir%/}"
+if [ -z "$run_dir" ]; then
+  run_dir="$(ls -dt "$ROOT/runs/$WIRE/$VARIANT"/*/ 2>/dev/null | head -1)"
+  run_dir="${run_dir%/}"
+fi
 
 if [ "$rc" -ne 0 ]; then
   cls="$(python3 "$ROOT/lib/classify_failure.py" "$run_dir/raw.json" 2>/dev/null || echo OTHER)"

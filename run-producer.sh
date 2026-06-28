@@ -70,6 +70,7 @@ TODAY_TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
 RUN_ID="claude-code-${TODAY_TS}"
 RUN_DIR="${PRODUCER_ROOT}/runs/${WIRE}/${VARIANT}/${RUN_ID}"
 mkdir -p "$RUN_DIR"
+echo "RUN_DIR=$RUN_DIR"
 
 # --- render prompt ---
 PROMPT_FILE="$RUN_DIR/prompt.txt"
@@ -87,10 +88,16 @@ sed \
 echo "[producer] wire=${WIRE} variant=${VARIANT} model=${MODEL} run=${RUN_ID}"
 echo "[producer] -> $RUN_DIR"
 
+# --- portable wall-clock cap on the producer (a hung claude -p must not block later wires) ---
+PRODUCER_TIMEOUT="${SCOUT_PRODUCER_TIMEOUT:-600}"
+if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout "$PRODUCER_TIMEOUT")
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT=(gtimeout "$PRODUCER_TIMEOUT")
+else TIMEOUT=(); echo "[producer] note: no timeout binary — running uncapped" >&2; fi
+
 # --- invoke Claude Code headless ---
 # Stream-JSON in, capture; permission-mode acceptEdits + allow web tools (non-interactive safe).
 RAW_JSON="$RUN_DIR/raw.json"
-"$CLAUDE" -p "$(cat "$PROMPT_FILE")" \
+"${TIMEOUT[@]}" "$CLAUDE" -p "$(cat "$PROMPT_FILE")" \
   --model "$MODEL" \
   --output-format json \
   --permission-mode acceptEdits \

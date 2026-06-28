@@ -22,11 +22,17 @@ import json
 import os
 import ssl
 import sys
+import time
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
 
 SOURCE = "claude-code"  # becomes scan_source; the heartbeat watches this exact value
+
+# Retry only transient delivery failures (rate-limit / gateway / network). Permanent 4xx
+# (400/401/403/404) are NOT retried — fail fast so the alert is actionable.
+TRANSIENT_HTTP = {429, 500, 502, 503, 504}
+MAX_ATTEMPTS = 3
 
 
 class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
@@ -80,16 +86,35 @@ def main(opps_path, wire, variant, scan_date, api_base=None):
         _RefuseRedirect,
         urllib.request.HTTPSHandler(context=ssl.create_default_context()),
     )
-    try:
-        with opener.open(req, timeout=60) as r:
-            resp = json.load(r)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode(errors="ignore")[:300]
-        print(f"submit: Wire Room rejected the batch (HTTP {e.code}): {detail}", file=sys.stderr)
-        return 1
-    except Exception as e:  # network/timeout/TLS/etc.
-        print(f"submit: could not reach the Wire Room at {api_base}: {e}", file=sys.stderr)
-        return 1
+
+    backoff = 2  # seconds; doubles each retry -> 2s, then 4s
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            with opener.open(req, timeout=60) as r:
+                resp = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="ignore")[:300]
+            if e.code in TRANSIENT_HTTP and attempt < MAX_ATTEMPTS:
+                print(f"submit: transient HTTP {e.code} from Wire Room "
+                      f"(attempt {attempt}/{MAX_ATTEMPTS}), retrying in {backoff}s: {detail}", file=sys.stderr)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            print(f"submit: Wire Room rejected the batch (HTTP {e.code}): {detail}", file=sys.stderr)
+            return 1
+        except urllib.error.URLError as e:  # network/timeout/TLS/etc. (non-HTTP) — transient
+            if attempt < MAX_ATTEMPTS:
+                print(f"submit: could not reach the Wire Room "
+                      f"(attempt {attempt}/{MAX_ATTEMPTS}), retrying in {backoff}s: {e}", file=sys.stderr)
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            print(f"submit: could not reach the Wire Room at {api_base}: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"submit: could not reach the Wire Room at {api_base}: {e}", file=sys.stderr)
+            return 1
 
     n = len(opps)
     print(f"submit: delivered {n} opportunit{'y' if n == 1 else 'ies'} to the Wire Room queue "
