@@ -12,7 +12,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # loses to the Docker CMD), running the producer would only fail AUTH on every wire and spam ops
 # alerts. Refuse cleanly instead. exit 0 because a no-op is healthy, not a failure.
 if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-  echo "[run-all] no CLAUDE_CODE_OAUTH_TOKEN — not the scout service; skipping the producer (clean no-op)." >&2
+  # A scout with no token is a real misconfiguration — fail LOUD so it's visible, instead of
+  # silently looking healthy (M10). Any other declared role (e.g. a tokenless service misrouted
+  # to this command) is a clean no-op so it can't spam AUTH alerts. SERVICE_ROLE defaults to
+  # 'scout' so a missing role errs on the side of visibility.
+  if [ "${SERVICE_ROLE:-scout}" = "scout" ]; then
+    echo "[run-all] SERVICE_ROLE=scout but CLAUDE_CODE_OAUTH_TOKEN is missing — refusing loudly (run 'claude setup-token' and set it on the scout service)." >&2
+    exit 1
+  fi
+  echo "[run-all] no CLAUDE_CODE_OAUTH_TOKEN and SERVICE_ROLE='${SERVICE_ROLE:-}' (not scout) — skipping (clean no-op)." >&2
   exit 0
 fi
 
