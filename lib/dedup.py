@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """dedup.py — drop opportunities whose source_url is already known to Wire Room.
 
-Queries GET /api/scan/seen-urls?wire=<wire> (wire-room-ops, INTERNAL_API_KEY auth)
-for the normalized-URL set, then removes any producer opportunity whose normalized
-URL is present. Writes the filtered set back in place.
+Queries GET /api/scan/seen-urls?wire=<wire>&scope=all (wire-room-ops, INTERNAL_API_KEY
+auth) for the COMPLETE normalized-URL set, then removes any producer opportunity whose
+normalized URL is present. Writes the filtered set back in place.
+
+scope=all is required: the endpoint's default ('seed') returns only the one-time
+bootstrap rows (~1% of the catalog), which silently made this whole stage a no-op —
+it dropped 0 every run while Wire Room's server-side dedup caught the re-finds after
+submit. scope=all returns every registered URL so the dedup actually works here.
 
 Normalization matches Wire Room's (utils/url.ts normalizeUrl): lowercased host,
 stripped scheme/www/trailing slash, dropped query/fragment.
@@ -54,9 +59,11 @@ def normalize_url(u: str) -> str:
 
 def fetch_seen(api_base: str, wire: str, key: str) -> set[str]:
     # Configurable cap (M6): past this many seen URLs the dedup is partial. Default is
-    # generous; warn if we hit it so the truncation is visible, not silent.
-    limit = int(os.environ.get("DEDUP_SEEN_LIMIT", "2000"))
-    url = f"{api_base.rstrip('/')}/api/scan/seen-urls?wire={urllib.parse.quote(wire)}&limit={limit}"
+    # generous (the real per-wire set is a few thousand); warn if we hit it so the
+    # truncation is visible, not silent.
+    limit = int(os.environ.get("DEDUP_SEEN_LIMIT", "50000"))
+    url = (f"{api_base.rstrip('/')}/api/scan/seen-urls"
+           f"?wire={urllib.parse.quote(wire)}&limit={limit}&scope=all")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
     # cert-verifying TLS + no redirect following (the key never leaves the intended host)
     opener = urllib.request.build_opener(

@@ -85,6 +85,25 @@ sed \
   -e "s|{{TODAY_TS}}|${TODAY_TS}|" \
   "${PRODUCER_ROOT}/prompts/producer.md" > "$PROMPT_FILE"
 
+# --- prime with the already-catalogued set so the producer hunts NEW, not re-finds.
+#     Best-effort: known_programs.py emits nothing without DATABASE_URL, so the prompt just
+#     renders bare (unchanged behavior). Spliced via python (portable; the list is multi-line).
+#     Toggle off with SCOUT_PRIME_KNOWN=0. known.txt is kept in the run dir for observability. ---
+KNOWN_FILE="$RUN_DIR/known.txt"
+: > "$KNOWN_FILE"
+if [[ "${SCOUT_PRIME_KNOWN:-1}" != "0" ]]; then
+  python3 "${PRODUCER_ROOT}/lib/known_programs.py" "$WIRE" > "$KNOWN_FILE" 2>/dev/null || : > "$KNOWN_FILE"
+fi
+python3 - "$PROMPT_FILE" "$KNOWN_FILE" <<'PY'
+import sys
+prompt_path, known_path = sys.argv[1], sys.argv[2]
+known = open(known_path).read().strip()
+text = open(prompt_path).read().replace("{{KNOWN_PROGRAMS}}", known)
+open(prompt_path, "w").write(text)
+PY
+KNOWN_N=$(grep -c '^- ' "$KNOWN_FILE" 2>/dev/null || echo 0)
+echo "[producer] primed with ${KNOWN_N} already-known ${WIRE} programs"
+
 echo "[producer] wire=${WIRE} variant=${VARIANT} model=${MODEL} run=${RUN_ID}"
 echo "[producer] -> $RUN_DIR"
 
