@@ -15,6 +15,8 @@ TODAY="$(date -u +%Y-%m-%d)"
 
 # email an alert; body comes on stdin. A failed alert must not crash the run.
 alert() { python3 "$ROOT/lib/notify.py" "$1" || echo "[run-scout] ALERT SEND FAILED: $1" >&2; }
+# record the run outcome in the durable scout_runs ledger (M8; best-effort, needs DATABASE_URL)
+ledger() { python3 "$ROOT/lib/ledger.py" "$run_dir" "$1" "${2:-}" || true; }
 
 # 1. discover -> verify -> report
 out="$("$ROOT/run-producer.sh" --wire "$WIRE" --variant "$VARIANT" --model "$MODEL" 2>&1)"; rc=$?
@@ -35,6 +37,7 @@ if [ "$rc" -ne 0 ]; then
     *)     subj="⚠️ Grant Wire Scout FAILED ($WIRE/$VARIANT, rc=$rc)" ;;
   esac
   printf '%s\n' "$out" | tail -25 | alert "$subj"
+  ledger "$(printf '%s' "$cls" | tr 'A-Z' 'a-z')" "$cls"
   exit "$rc"
 fi
 
@@ -43,7 +46,9 @@ sub_out="$(python3 "$ROOT/lib/submit.py" "$run_dir/opportunities.json" "$WIRE" "
 printf '%s\n' "$sub_out"
 if [ "$src" -ne 0 ]; then
   printf '%s\n' "$sub_out" | alert "⚠️ Grant Wire Scout DELIVERY failed — couldn't post to the Wire Room queue ($WIRE/$VARIANT)"
+  ledger delivery
   exit "$src"
 fi
 
+ledger ok
 echo "[run-scout] ok ($WIRE/$VARIANT)"
