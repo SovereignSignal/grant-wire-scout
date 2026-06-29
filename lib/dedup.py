@@ -38,19 +38,25 @@ class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def normalize_url(u: str) -> str:
+    # Lowercase only the HOST (case-insensitive), NOT the path: paths can be case-
+    # sensitive, so lowercasing them risks false-dropping a distinct find (recall-
+    # negative). Applied identically to the seen set and producer URLs so the forms match.
     try:
-        p = urllib.parse.urlparse(u.strip().lower())
+        p = urllib.parse.urlparse(u.strip())
     except Exception:
         return ""
     if not p.netloc:
         return ""
-    host = p.netloc.removeprefix("www.")
+    host = p.netloc.lower().removeprefix("www.")
     path = p.path.rstrip("/")
     return f"{host}{path}"
 
 
 def fetch_seen(api_base: str, wire: str, key: str) -> set[str]:
-    url = f"{api_base.rstrip('/')}/api/scan/seen-urls?wire={urllib.parse.quote(wire)}&limit=500"
+    # Configurable cap (M6): past this many seen URLs the dedup is partial. Default is
+    # generous; warn if we hit it so the truncation is visible, not silent.
+    limit = int(os.environ.get("DEDUP_SEEN_LIMIT", "2000"))
+    url = f"{api_base.rstrip('/')}/api/scan/seen-urls?wire={urllib.parse.quote(wire)}&limit={limit}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
     # cert-verifying TLS + no redirect following (the key never leaves the intended host)
     opener = urllib.request.build_opener(
@@ -60,6 +66,9 @@ def fetch_seen(api_base: str, wire: str, key: str) -> set[str]:
     with opener.open(req, timeout=30) as r:
         data = json.load(r)
     seen = data.get("urls") or data.get("items") or []
+    if len(seen) >= limit:
+        print(f"[dedup] WARNING: hit the seen-urls cap ({limit}) — dedup may be partial; "
+              f"raise DEDUP_SEEN_LIMIT", file=sys.stderr)
     out = set()
     for row in seen:
         u = row.get("normalized_url") or row.get("url") or ""
