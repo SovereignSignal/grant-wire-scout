@@ -1,2 +1,3 @@
 # Only the heartbeat (lib/heartbeat.py) needs a DB driver; everything else is stdlib.
-psycopg2-binary>=2.9
+# Pinned (C3) so a surprise driver release can't break the heartbeat build; bump deliberately.
+psycopg2-binary==2.9.10

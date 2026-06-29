@@ -6,8 +6,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Claude Code CLI — the scout runs headless `claude -p`
-RUN npm install -g @anthropic-ai/claude-code
+# Claude Code CLI — the scout runs headless `claude -p`. PINNED (C3): a breaking CLI
+# release could change flag semantics and silently kill the scout, so bump deliberately.
+# node:22-slim stays floating so it keeps security patches within the 22 line; pin the base
+# image by digest if you need full build reproducibility.
+RUN npm install -g @anthropic-ai/claude-code@2.1.195
 
 WORKDIR /app
 COPY requirements.txt ./
