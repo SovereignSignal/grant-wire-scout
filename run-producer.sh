@@ -115,16 +115,17 @@ env -u INTERNAL_API_KEY -u RESEND_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN -u ALERT_FR
   python3 "${PRODUCER_ROOT}/lib/verify.py" "$RUN_DIR/opportunities.json" \
   || echo "[producer] verify failed (non-fatal) — continuing"
 
-# --- re-render the report so it reflects verification status (NON-FATAL diagnostic) ---
-python3 "${PRODUCER_ROOT}/lib/report.py" "$RUN_DIR/opportunities.json" "$RUN_DIR/report.md" "$RAW_JSON" \
-  || echo "[producer] report failed (non-fatal) — continuing"
-
 # --- optional: dedup against Wire Room seen-URLs (only if API configured) ---
 if [[ -n "${WIRE_ROOM_API:-}" && -n "${INTERNAL_API_KEY:-}" ]]; then
   echo "[producer] deduping against Wire Room seen-URLs…"
   python3 "${PRODUCER_ROOT}/lib/dedup.py" "$RUN_DIR/opportunities.json" "${WIRE}" "${WIRE_ROOM_API}" \
     || echo "[producer] dedup skipped (API error) — full set retained"
 fi
+
+# --- render the report LAST (M7) so it reflects the DELIVERED set: post-verify stamps AND
+#     post-dedup rejections (it was rendered before dedup, so it showed items that get dropped). ---
+python3 "${PRODUCER_ROOT}/lib/report.py" "$RUN_DIR/opportunities.json" "$RUN_DIR/report.md" "$RAW_JSON" \
+  || echo "[producer] report failed (non-fatal) — continuing"
 
 # --- meta + summary ---
 python3 - "$RUN_DIR" "$WIRE" "$VARIANT" "$RUN_ID" "$MODEL" <<'PY' > "$RUN_DIR/meta.json"
