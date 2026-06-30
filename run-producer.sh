@@ -107,8 +107,15 @@ echo "[producer] primed with ${KNOWN_N} already-known ${WIRE} programs"
 echo "[producer] wire=${WIRE} variant=${VARIANT} model=${MODEL} run=${RUN_ID}"
 echo "[producer] -> $RUN_DIR"
 
-# --- portable wall-clock cap on the producer (a hung claude -p must not block later wires) ---
-PRODUCER_TIMEOUT="${SCOUT_PRODUCER_TIMEOUT:-600}"
+# --- portable wall-clock cap on the producer. This is a SAFETY NET for a genuinely hung
+#     claude -p, NOT the normal work limiter: real work is bounded by --max-turns and cost is
+#     turn/token-driven, not wall-clock-driven, so a higher cap costs nothing extra — it just
+#     lets the paid-for turn budget finish. The old 600s cap was under-provisioned: runs had
+#     already crept to ~535s pre-priming, and the 2026-06-29 known-catalog priming (which makes
+#     the producer hunt for NEW programs beyond the known set) pushed the first cron run past
+#     600s, so `timeout` killed it mid-flight (rc=124), discarding all work and firing an alert.
+#     1200s gives the turn budget room to complete; override with SCOUT_PRODUCER_TIMEOUT. ---
+PRODUCER_TIMEOUT="${SCOUT_PRODUCER_TIMEOUT:-1200}"
 if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout "$PRODUCER_TIMEOUT")
 elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT=(gtimeout "$PRODUCER_TIMEOUT")
 else TIMEOUT=(); echo "[producer] note: no timeout binary — running uncapped" >&2; fi
