@@ -19,13 +19,20 @@ trap cleanup EXIT
 fail(){ echo "FAIL: $1" >&2; exit 1; }
 
 # portable coreutils-`timeout` shim: `timeout DUR CMD...` -> run CMD, SIGTERM after DUR, map to 124.
+# Timer is a DIRECT background `sleep` killed by pid, so it can't orphan and hold the caller's
+# command-substitution pipe open (a `( sleep; kill ) &` subshell leaks its sleep child on kill).
 cat > "$TMP/timeout" <<'EOF'
 #!/usr/bin/env bash
 dur="$1"; shift
-"$@" & pid=$!
-( sleep "$dur"; kill -TERM "$pid" 2>/dev/null ) & watcher=$!
-wait "$pid" 2>/dev/null; rc=$?
-kill -TERM "$watcher" 2>/dev/null; wait "$watcher" 2>/dev/null
+"$@" & cmd=$!
+sleep "$dur" & slp=$!
+rc=""
+while kill -0 "$cmd" 2>/dev/null; do
+  kill -0 "$slp" 2>/dev/null || { kill -TERM "$cmd" 2>/dev/null; wait "$cmd" 2>/dev/null; rc=124; break; }
+  sleep 0.2
+done
+[ -z "$rc" ] && { wait "$cmd" 2>/dev/null; rc=$?; }
+kill -TERM "$slp" 2>/dev/null; wait "$slp" 2>/dev/null
 [ "$rc" -ge 128 ] && rc=124
 exit "$rc"
 EOF
