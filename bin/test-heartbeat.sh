@@ -41,7 +41,11 @@ import json, os
 class _Cur:
     def __init__(self, fx): self.fx = fx; self.rows = []
     def execute(self, sql, params=None):
-        self.rows = [tuple(r) for r in self.fx.get("runs" if "scout_runs" in sql else "counts", [])]
+        # heartbeat.py tags each query with an /* hb:<name> */ marker; two of them read
+        # scout_runs, so the table name alone can no longer tell them apart.
+        key = next((k for k in ("counts", "runs", "trend") if f"/* hb:{k} */" in sql), None)
+        assert key, f"unrecognized query (missing /* hb:* */ marker):\n{sql}"
+        self.rows = [tuple(r) for r in self.fx.get(key, [])]
     def fetchall(self): return self.rows
     def __enter__(self): return self
     def __exit__(self, *a): return False
@@ -125,6 +129,69 @@ sys.exit(1 if fails else 0)
 PY
 [ $? -eq 0 ] && ok "diagnose() cause matrix" || bad "diagnose() cause matrix"
 
+echo "== A2. collapse_runs(): every run in the window counts, not just the last one =="
+# The window can hold MORE THAN ONE run per wire: run-all.sh defaults to SCOUT_VARIANTS='A B',
+# so each wire runs twice a tick and writes two ledger rows. Reading only the newest row judged
+# the wire by whichever variant finished last (B, the deliberately low-yield tight-filter arm)
+# and went blind to the other — re-opening the wrong-cause hole 2026-08-05 closed.
+python3 - "$ROOT" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import heartbeat as hb
+cases = [
+    # (label, rows for ONE wire, expected (status, opps))
+    ("variant B's 0 must not erase variant A's 3", [("ok", 0), ("ok", 3)],      ("ok", 3)),
+    ("a failed arm outranks a clean one",          [("ok", 3), ("auth", 0)],    ("auth", 3)),
+    ("yields from both arms sum",                  [("ok", 2), ("ok", 1)],      ("ok", 3)),
+    ("quota outranks a generic failure",           [("quota", 0), ("failed", 0)], ("quota", 0)),
+    ("a null opportunity_count counts as 0",       [("ok", None)],              ("ok", 0)),
+    ("a single run is unchanged",                  [("ok", 4)],                 ("ok", 4)),
+]
+fails = 0
+for label, rows, want in cases:
+    got = hb.collapse_runs(rows)
+    if got != want:
+        print(f"  FAIL: {label}: got={got!r} want={want!r}", file=sys.stderr); fails += 1
+    else:
+        print(f"  ok: {label}")
+if hb.collapse_runs([]) is not None:
+    print("  FAIL: no rows must collapse to None (a no-run, not a clean run)", file=sys.stderr); fails += 1
+else:
+    print("  ok: no rows -> None (stays a no-run)")
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && ok "collapse_runs() folds every run in the window" || bad "collapse_runs() folds every run in the window"
+
+echo "== A3. trend context: is this zero normal for this wire? =="
+python3 - "$ROOT" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import heartbeat as hb
+fails = 0
+def check(label, cond):
+    global fails
+    if cond: print(f"  ok: {label}")
+    else: print(f"  FAIL: {label}", file=sys.stderr); fails += 1
+
+t = hb.summarize_trend([("ai", 3), ("ai", 4), ("ai", 3), ("ai", 2), ("oss", 0), ("oss", 2), ("oss", 0)])
+check("median over prior run-days", t["ai"].median == 3)
+check("counts the days observed", t["ai"].days == 4)
+check("counts prior zero days", t["ai"].zeros == 0)
+check("a wire with zero days reports them", t["oss"].zeros == 2 and t["oss"].days == 3)
+check("a wire with no history is absent", "crypto" not in t)
+
+# A zero day on a wire that has never had one reads differently from one that has them weekly.
+first = hb.diagnose_wire("ai", 0, ("ok", 0), t["ai"]).text
+usual = hb.diagnose_wire("oss", 0, ("ok", 0), t["oss"]).text
+check("unprecedented zero says so", "first" in first.lower())
+check("unprecedented zero quotes the median", "3" in first and "median" in first.lower())
+check("a wire that zeroes before calls it normal", "normal" in usual.lower())
+check("trend does not change the cause code", hb.diagnose_wire("ai", 0, ("ok", 0), t["ai"]).cause == "zero-yield")
+check("no history -> message unchanged", "median" not in hb.diagnose_wire("ai", 0, ("ok", 0)).text.lower())
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && ok "trend context on zero-yield" || bad "trend context on zero-yield"
+
 echo "== B. exit contract =="
 
 # B1 all wires delivering -> healthy, rc=0, no alert
@@ -176,6 +243,48 @@ rc="$(env STUB_DB_FAIL=1 bash -c "$(declare -f run_hb); TMP='$TMP'; CAP='$CAP'; 
 
 rc="$(env PYTHONPATH="$TMP/stub" DATABASE_URL= python3 "$ROOT/lib/heartbeat.py" >/dev/null 2>&1; echo $?)"
 [ "$rc" = "2" ] && ok "missing DATABASE_URL -> rc=2" || bad "missing DATABASE_URL -> rc=$rc (want 2)"
+
+echo "== C. multi-variant windows (SCOUT_VARIANTS='A B') =="
+
+# C1 THE MASKED CASE: variant A reported 3, variant B (tight-filter) reported 0, nothing landed.
+#    Judging by the newest row alone called this "a thin day, no action needed" and swallowed a
+#    real lost-in-delivery. Both rows must be read.
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",3],["oss","ok",0]]}')"
+body="$(alert_body)"
+grep -qi "deliver" <<<"$body" \
+  && ok "A=3 + B=0 with 0 landed -> lost-in-delivery, not a thin day" \
+  || bad "A=3 + B=0 with 0 landed -> cause is not lost-in-delivery"
+grep -qi "found nothing" <<<"$body" \
+  && bad "still reports 'found nothing' while variant A reported 3" \
+  || ok "does not claim 'found nothing' when an arm reported finds"
+[ "$rc" = "0" ] && ok "multi-variant detection -> rc=0" || bad "multi-variant detection -> rc=$rc (want 0)"
+
+# C2 one arm's AUTH failure must not be hidden by the other arm's clean empty run
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","auth",0],["oss","ok",0]]}')"
+grep -qi "setup-token" <<<"$(alert_body)" \
+  && ok "AUTH on one arm survives a clean run on the other" \
+  || bad "AUTH on one arm was masked by the other arm"
+
+echo "== D. trend context in the delivered alert =="
+
+# D1 a zero day on a wire that has never had one must say so, with the median
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[["oss",3],["oss",4],["oss",3]]}')"
+body="$(alert_body)"
+grep -qi "median" <<<"$body" && ok "zero-yield alert carries the wire's median" \
+                             || bad "zero-yield alert has no trend context"
+grep -qi "first" <<<"$body" && ok "alert flags an unprecedented zero day" \
+                            || bad "alert does not flag the zero as unprecedented"
+
+# D2 a wire that zeroes routinely must NOT be dressed up as a first
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[["oss",0],["oss",2],["oss",0]]}')"
+grep -qi "normal" <<<"$(alert_body)" && ok "a routinely-empty wire is called normal" \
+                                     || bad "routine zero day not identified as normal"
+
+# D3 no history (a brand-new wire) -> the message degrades cleanly, no trend sentence
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[]}')"
+grep -qi "median" <<<"$(alert_body)" && bad "invented a trend for a wire with no history" \
+                                    || ok "no history -> no trend sentence"
+[ "$rc" = "0" ] && ok "trendless zero-yield -> rc=0" || bad "trendless zero-yield -> rc=$rc (want 0)"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"
