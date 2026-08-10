@@ -15,9 +15,23 @@ found nothing — cron alive, token valid, advice wrong. It now reads the scout_
 built for exactly this post-mortem) and reports what actually happened:
 
     no-run            no ledger row in the window        -> the cron did not run
-    auth / quota      the run failed that way            -> the run's own error class
+    auth / quota      a run failed that way              -> that run's own error class
     zero-yield        status=ok, 0 opportunities         -> ran clean, found nothing (thin day)
     lost-in-delivery  status=ok, opps>0, 0 rows landed   -> broke between submit and the queue
+
+The window is judged from EVERY run in it, not the newest one. A wire runs once per prompt
+variant per tick (run-all.sh defaults to SCOUT_VARIANTS='A B'), so it can write two ledger
+rows; picking the latest judged the wire by whichever arm finished last — B, the deliberately
+low-yield tight-filter — and hid the other arm's auth failure or lost-in-delivery behind B's
+clean empty run, reporting it as "a thin day, no action needed". collapse_runs() folds them:
+worst status wins, yields sum. Production runs variant A only today, so this was latent — it
+would have gone live the moment the A/B that bin/ab-score.sh exists to score was switched on.
+
+A zero-yield alert also carries the wire's habit (summarize_trend): the 26h window spans one
+tick and has no memory, so it cannot tell a thin day from a wire drying up. The median daily
+yield and the count of prior zero days answer "is this normal for this wire?" — 2026-08-10,
+ai returned 0 for the first time in 20 run-days against a median of 3, while crypto zeroes
+roughly weekly. Identical alerts, opposite meanings.
 
 EXIT CODES — a firing dead-man's-switch is NOT a crashed deploy. The service runs with
 restartPolicyType=NEVER, so any non-zero exit makes Railway send "Deploy Crashed!"; returning 1
@@ -31,6 +45,7 @@ Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (
      plus RESEND_API_KEY + NOTIFICATION_EMAIL + ALERT_FROM (used by lib/notify.py).
 """
 import os
+import statistics
 import subprocess
 import sys
 from collections import namedtuple
@@ -39,12 +54,68 @@ SOURCE = "claude-code"  # must match lib/submit.py's SOURCE
 
 # wire: the wire; silent: nothing reached the queue; cause: machine-readable code; text: the why.
 Diagnosis = namedtuple("Diagnosis", "wire silent cause text")
+# median: typical daily yield; days: prior run-days observed; zeros: how many yielded nothing.
+Trend = namedtuple("Trend", "median days zeros")
+
+# Worst status wins when a wire ran more than once in the window: a failed arm is more
+# actionable than a clean one, and auth (needs a token rotation) outranks everything.
+_SEVERITY = {"ok": 0, "auth": 3, "quota": 2}
 
 
-def diagnose_wire(wire, count, run):
-    """Explain one wire's delivery, given its queue row count and its latest scout_runs row.
+def _severity(status):
+    return _SEVERITY.get((status or "").strip().lower(), 1)  # any other failure sits above ok
 
-    `run` is None (no run recorded in the window) or a (status, opportunity_count) tuple.
+
+def collapse_runs(rows):
+    """Fold every run one wire had in the window into a single (status, opportunity_count).
+
+    A window can hold MORE THAN ONE run per wire: run-all.sh defaults to SCOUT_VARIANTS='A B',
+    so each wire runs both prompt arms per tick and each run writes its own ledger row. Reading
+    only the newest row judged the wire by whichever arm finished last — variant B, the
+    deliberately low-yield tight-filter — and went blind to the other, so an auth failure or a
+    lost-in-delivery on variant A could hide behind B's clean empty run and be reported as
+    "a thin day, no action needed". That is the wrong-cause hole 2026-08-05 closed, reopened
+    through the variant dimension. Worst status wins; yields sum. Returns None for no rows,
+    which keeps "no run happened" distinct from "a run happened and found nothing".
+    """
+    rows = list(rows)
+    if not rows:
+        return None
+    # max() keeps the first maximal element, so ties resolve to the earliest run.
+    status = max((r[0] for r in rows), key=_severity)
+    return status, sum((r[1] or 0) for r in rows)
+
+
+def summarize_trend(rows):
+    """Per-wire yield habit from (wire, daily_total) pairs — one pair per wire per prior day.
+
+    A single alert cannot tell "thin day" from "this wire is drying up"; the 26h window spans
+    one tick and has no memory. The median says what this wire normally returns, and the zero
+    count says whether an empty day is routine here or unprecedented.
+    """
+    by_wire = {}
+    for wire, total in rows:
+        by_wire.setdefault(wire, []).append(total or 0)
+    return {w: Trend(statistics.median(v), len(v), sum(1 for n in v if not n))
+            for w, v in by_wire.items() if v}
+
+
+def _trend_text(trend):
+    """One sentence of history, or nothing at all when the wire has none to speak of."""
+    if not trend or not trend.days:
+        return ""
+    if trend.zeros:
+        return (f" Trend: a median of {trend.median:g}/day over {trend.days} prior run-days, "
+                f"{trend.zeros} of them zero — empty days are normal for this wire.")
+    return (f" Trend: a median of {trend.median:g}/day over {trend.days} prior run-days, none "
+            f"of them zero — this is a first for this wire, so it is worth a look.")
+
+
+def diagnose_wire(wire, count, run, trend=None):
+    """Explain one wire's delivery, given its queue row count and its collapsed scout_runs rows.
+
+    `run` is None (no run recorded in the window) or a (status, opportunity_count) tuple, as
+    returned by collapse_runs(). `trend` is an optional Trend giving the wire's prior habit.
     """
     if count > 0:
         return Diagnosis(wire, False, "delivering", f"{count} entries reached the queue")
@@ -60,53 +131,74 @@ def diagnose_wire(wire, count, run):
 
     if status == "auth":
         return Diagnosis(wire, True, "auth",
-                         "the last run failed AUTH — the claude token was rejected. Re-run "
+                         "a run failed AUTH — the claude token was rejected. Re-run "
                          "`claude setup-token` and update CLAUDE_CODE_OAUTH_TOKEN on the scout service.")
     if status == "quota":
         return Diagnosis(wire, True, "quota",
-                         "the last run hit the Max usage cap (QUOTA) and produced nothing.")
+                         "a run hit the Max usage cap (QUOTA) and produced nothing.")
     if status != "ok":
         return Diagnosis(wire, True, status or "unknown",
-                         f"the last run failed with status '{status or 'unknown'}' — see the scout "
-                         "service's logs and the scout_runs row for this wire.")
+                         f"a run failed with status '{status or 'unknown'}' — see the scout "
+                         "service's logs and the scout_runs rows for this wire.")
     if opps:
         return Diagnosis(wire, True, "lost-in-delivery",
-                         f"the last run completed cleanly and reported {opps} "
+                         f"the scout ran cleanly and reported {opps} "
                          f"{'opportunity' if opps == 1 else 'opportunities'}, but 0 reached the queue. "
                          "The break is between submit and the queue — a delivery error, or every item "
                          "was deduped as already-seen.")
     return Diagnosis(wire, True, "zero-yield",
-                     "the last run completed cleanly and found nothing new — a thin day, not a fault. "
-                     "No action needed unless it repeats.")
+                     "the scout ran cleanly and found nothing new — a thin day, not a fault. "
+                     "No action needed unless it repeats." + _trend_text(trend))
 
 
 def _fetch(dsn, hours, wires):
-    """Return (counts, runs): queue rows per wire, and the latest ledger row per wire."""
+    """Return (counts, runs, trends): queue rows per wire, the wire's collapsed ledger outcome,
+    and its yield habit over the 30 days BEFORE the judged window.
+
+    Each query carries an /* hb:<name> */ marker: two of them read scout_runs, so bin/
+    test-heartbeat.sh's psycopg2 stub can no longer tell them apart by table name alone.
+    """
     import psycopg2
 
     conn = psycopg2.connect(dsn)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT wire, count(*) FROM scan_entries "
+                "/* hb:counts */ SELECT wire, count(*) FROM scan_entries "
                 "WHERE scan_source = %s AND created_at > now() - (%s || ' hours')::interval "
                 "GROUP BY wire",
                 (SOURCE, str(hours)),
             )
             counts = {w: n for w, n in cur.fetchall() if w in wires}
         with conn.cursor() as cur:
-            # The most recent run per wire inside the SAME window we're judging, so "no row"
-            # means "no run happened in the window", not "no run ever".
+            # EVERY run in the window we're judging, not just the newest — a wire runs once per
+            # prompt variant per tick. "No rows" still means "no run happened in the window".
             cur.execute(
-                "SELECT DISTINCT ON (wire) wire, status, opportunity_count FROM scout_runs "
+                "/* hb:runs */ SELECT wire, status, opportunity_count FROM scout_runs "
                 "WHERE created_at > now() - (%s || ' hours')::interval "
-                "ORDER BY wire, created_at DESC",
+                "ORDER BY wire, created_at",
                 (str(hours),),
             )
-            runs = {w: (s, n) for w, s, n in cur.fetchall() if w in wires}
+            grouped = {}
+            for w, s, n in cur.fetchall():
+                if w in wires:
+                    grouped.setdefault(w, []).append((s, n))
+            runs = {w: collapse_runs(rows) for w, rows in grouped.items()}
+        with conn.cursor() as cur:
+            # One row per wire per prior run-day. Bounded to clean runs: a failed run's 0 says
+            # something about the scout, not about how much the wire normally yields. Ends where
+            # the judged window begins, so today's silence can't flatten its own baseline.
+            cur.execute(
+                "/* hb:trend */ SELECT wire, sum(opportunity_count) FROM scout_runs "
+                "WHERE status = 'ok' AND created_at > now() - interval '30 days' "
+                "AND created_at <= now() - (%s || ' hours')::interval "
+                "GROUP BY wire, (created_at AT TIME ZONE 'UTC')::date",
+                (str(hours),),
+            )
+            trends = summarize_trend([(w, n) for w, n in cur.fetchall() if w in wires])
     finally:
         conn.close()
-    return counts, runs
+    return counts, runs, trends
 
 
 def main():
@@ -123,14 +215,14 @@ def main():
         return 2
 
     try:
-        counts, runs = _fetch(dsn, hours, set(wires))
+        counts, runs, trends = _fetch(dsn, hours, set(wires))
     except Exception as e:
         # The heartbeat couldn't read the DB, so it can't rule silence in OR out. Fail loudly
         # (rc=2 -> Railway's crash mail) rather than staying quiet and looking healthy.
         print(f"heartbeat: DB query failed — cannot judge silence: {e}", file=sys.stderr)
         return 2
 
-    results = [diagnose_wire(w, counts.get(w, 0), runs.get(w)) for w in wires]
+    results = [diagnose_wire(w, counts.get(w, 0), runs.get(w), trends.get(w)) for w in wires]
     summary = " ".join(f"{d.wire}={counts.get(d.wire, 0)}" for d in results)
     silent = [d for d in results if d.silent]
 
