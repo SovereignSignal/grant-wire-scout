@@ -163,6 +163,11 @@ PY
 [ $? -eq 0 ] && ok "collapse_runs() folds every run in the window" || bad "collapse_runs() folds every run in the window"
 
 echo "== A3. trend context: is this zero normal for this wire? =="
+# Rows are (wire, day, daily_total) — day-ordered history, because "how many zeros" is not
+# enough: WHERE they sit matters. 2026-08-11 proved it — ai's second consecutive zero day was
+# reported as "empty days are normal for this wire" because the first day of the streak had
+# rolled into the baseline as "1 of them zero". Consecutive zeros must escalate, not
+# self-normalize.
 python3 - "$ROOT" <<'PY'
 import sys, os
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
@@ -173,20 +178,43 @@ def check(label, cond):
     if cond: print(f"  ok: {label}")
     else: print(f"  FAIL: {label}", file=sys.stderr); fails += 1
 
-t = hb.summarize_trend([("ai", 3), ("ai", 4), ("ai", 3), ("ai", 2), ("oss", 0), ("oss", 2), ("oss", 0)])
+t = hb.summarize_trend([
+    ("ai", "2026-08-01", 3), ("ai", "2026-08-02", 4), ("ai", "2026-08-03", 3), ("ai", "2026-08-04", 2),
+    # oss zeroes sometimes, but not lately: scattered, no trailing streak
+    ("oss", "2026-08-01", 0), ("oss", "2026-08-02", 2), ("oss", "2026-08-03", 0), ("oss", "2026-08-04", 2),
+])
 check("median over prior run-days", t["ai"].median == 3)
 check("counts the days observed", t["ai"].days == 4)
 check("counts prior zero days", t["ai"].zeros == 0)
-check("a wire with zero days reports them", t["oss"].zeros == 2 and t["oss"].days == 3)
+check("no trailing zeros -> streak 0", t["ai"].streak == 0 and t["oss"].streak == 0)
+check("a wire with zero days reports them", t["oss"].zeros == 2 and t["oss"].days == 4)
 check("a wire with no history is absent", "crypto" not in t)
+check("out-of-order rows still find the streak",
+      hb.summarize_trend([("x", "2026-08-03", 0), ("x", "2026-08-01", 3), ("x", "2026-08-02", 0)])["x"].streak == 2)
 
-# A zero day on a wire that has never had one reads differently from one that has them weekly.
+# THE 2026-08-11 CASE: 20 clean days median 3, then yesterday's first-ever zero. Today's zero
+# is the SECOND of a streak — the "unless it repeats" repeat — not a normal empty day.
+rows = [("ai", f"2026-07-{d:02d}", n) for d, n in enumerate([3,4,3,2,3,3,2,4,3,3,4,3,2,3,3,4,3,2,3,3], start=1)]
+streak = hb.summarize_trend(rows + [("ai", "2026-08-10", 0)])["ai"]
+check("trailing zero -> streak 1", streak.streak == 1)
+check("streak days leave the baseline", streak.days == 20 and streak.zeros == 0)
+check("streak does not flatten its own median", streak.median == 3)
+
+second = hb.diagnose_wire("ai", 0, ("ok", 0), streak).text
+check("a repeat says 'consecutive', with the count", "2nd consecutive" in second)
+check("a repeat is NOT dressed up as normal", "normal" not in second.lower())
+check("a repeat still quotes the pre-streak median", "median" in second.lower() and "3" in second)
+check("three in a row says 3rd",
+      "3rd consecutive" in hb.diagnose_wire("ai", 0, ("ok", 0),
+          hb.summarize_trend(rows + [("ai", "2026-08-10", 0), ("ai", "2026-08-11", 0)])["ai"]).text)
+
+# The other two readings survive
 first = hb.diagnose_wire("ai", 0, ("ok", 0), t["ai"]).text
 usual = hb.diagnose_wire("oss", 0, ("ok", 0), t["oss"]).text
 check("unprecedented zero says so", "first" in first.lower())
 check("unprecedented zero quotes the median", "3" in first and "median" in first.lower())
-check("a wire that zeroes before calls it normal", "normal" in usual.lower())
-check("trend does not change the cause code", hb.diagnose_wire("ai", 0, ("ok", 0), t["ai"]).cause == "zero-yield")
+check("scattered zeros still read as normal", "normal" in usual.lower())
+check("trend does not change the cause code", hb.diagnose_wire("ai", 0, ("ok", 0), streak).cause == "zero-yield")
 check("no history -> message unchanged", "median" not in hb.diagnose_wire("ai", 0, ("ok", 0)).text.lower())
 sys.exit(1 if fails else 0)
 PY
@@ -268,15 +296,15 @@ grep -qi "setup-token" <<<"$(alert_body)" \
 echo "== D. trend context in the delivered alert =="
 
 # D1 a zero day on a wire that has never had one must say so, with the median
-rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[["oss",3],["oss",4],["oss",3]]}')"
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[["oss","2026-08-01",3],["oss","2026-08-02",4],["oss","2026-08-03",3]]}')"
 body="$(alert_body)"
 grep -qi "median" <<<"$body" && ok "zero-yield alert carries the wire's median" \
                              || bad "zero-yield alert has no trend context"
 grep -qi "first" <<<"$body" && ok "alert flags an unprecedented zero day" \
                             || bad "alert does not flag the zero as unprecedented"
 
-# D2 a wire that zeroes routinely must NOT be dressed up as a first
-rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[["oss",0],["oss",2],["oss",0]]}')"
+# D2 a wire that zeroes routinely (scattered, not lately) must NOT be dressed up as a first
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[["oss","2026-08-01",0],["oss","2026-08-02",2],["oss","2026-08-03",0],["oss","2026-08-04",2]]}')"
 grep -qi "normal" <<<"$(alert_body)" && ok "a routinely-empty wire is called normal" \
                                      || bad "routine zero day not identified as normal"
 
@@ -285,6 +313,15 @@ rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":
 grep -qi "median" <<<"$(alert_body)" && bad "invented a trend for a wire with no history" \
                                     || ok "no history -> no trend sentence"
 [ "$rc" = "0" ] && ok "trendless zero-yield -> rc=0" || bad "trendless zero-yield -> rc=$rc (want 0)"
+
+# D4 THE 2026-08-11 EMAIL: yesterday's first-ever zero rolled into the baseline, and the
+#    second consecutive zero day went out as "empty days are normal for this wire".
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0]],"trend":[["oss","2026-08-01",3],["oss","2026-08-02",4],["oss","2026-08-03",3],["oss","2026-08-04",0]]}')"
+body="$(alert_body)"
+grep -qi "consecutive" <<<"$body" && ok "a trailing zero escalates to 'consecutive'" \
+                                  || bad "trailing zero did not escalate"
+grep -qi "normal" <<<"$body" && bad "second consecutive zero day still reads 'normal'" \
+                             || ok "a streak is not called normal"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"
