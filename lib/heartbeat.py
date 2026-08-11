@@ -54,8 +54,10 @@ SOURCE = "claude-code"  # must match lib/submit.py's SOURCE
 
 # wire: the wire; silent: nothing reached the queue; cause: machine-readable code; text: the why.
 Diagnosis = namedtuple("Diagnosis", "wire silent cause text")
-# median: typical daily yield; days: prior run-days observed; zeros: how many yielded nothing.
-Trend = namedtuple("Trend", "median days zeros")
+# median: typical daily yield; days: run-days observed; zeros: how many yielded nothing —
+# all three measured over the days BEFORE any trailing zero streak. streak: consecutive zero
+# days at the end of the history, i.e. the streak today's zero would extend.
+Trend = namedtuple("Trend", "median days zeros streak")
 
 # Worst status wins when a wire ran more than once in the window: a failed arm is more
 # actionable than a clean one, and auth (needs a token rotation) outranks everything.
@@ -87,23 +89,49 @@ def collapse_runs(rows):
 
 
 def summarize_trend(rows):
-    """Per-wire yield habit from (wire, daily_total) pairs — one pair per wire per prior day.
+    """Per-wire yield habit from (wire, day, daily_total) triples — one per wire per prior day.
 
     A single alert cannot tell "thin day" from "this wire is drying up"; the 26h window spans
     one tick and has no memory. The median says what this wire normally returns, and the zero
     count says whether an empty day is routine here or unprecedented.
+
+    Day order matters, not just the zero count: consecutive zeros must not self-normalize.
+    On 2026-08-11 ai's second consecutive zero day went out as "empty days are normal for this
+    wire" because the streak's first day had rolled into the baseline as "1 of them zero" —
+    the "no action needed unless it repeats" repeat, reported as routine. A trailing run of
+    zeros is therefore split off as `streak` (the streak today's zero would extend, counted in
+    run-days — days the wire did not run at all do not break it), and median/days/zeros
+    describe only the days before it, so a streak cannot flatten its own baseline either.
     """
     by_wire = {}
-    for wire, total in rows:
-        by_wire.setdefault(wire, []).append(total or 0)
-    return {w: Trend(statistics.median(v), len(v), sum(1 for n in v if not n))
-            for w, v in by_wire.items() if v}
+    for wire, day, total in rows:
+        by_wire.setdefault(wire, []).append((day, total or 0))
+    out = {}
+    for w, pairs in by_wire.items():
+        totals = [n for _, n in sorted(pairs)]
+        streak = next((i for i, n in enumerate(reversed(totals)) if n), len(totals))
+        base = totals[:len(totals) - streak]
+        out[w] = Trend(statistics.median(base) if base else 0, len(base),
+                       sum(1 for n in base if not n), streak)
+    return out
+
+
+def _ordinal(n):
+    if 10 <= n % 100 <= 20:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
 
 
 def _trend_text(trend):
     """One sentence of history, or nothing at all when the wire has none to speak of."""
-    if not trend or not trend.days:
+    if not trend or not (trend.days or trend.streak):
         return ""
+    if trend.streak:
+        base = (f" The {trend.days} run-days before the streak had a median of "
+                f"{trend.median:g}/day." if trend.days else "")
+        return (f" Trend: this is the {_ordinal(trend.streak + 1)} consecutive zero day for "
+                f"this wire — the repeat the last alert said to watch for, so take a look "
+                f"at its sources.{base}")
     if trend.zeros:
         return (f" Trend: a median of {trend.median:g}/day over {trend.days} prior run-days, "
                 f"{trend.zeros} of them zero — empty days are normal for this wire.")
@@ -189,13 +217,14 @@ def _fetch(dsn, hours, wires):
             # something about the scout, not about how much the wire normally yields. Ends where
             # the judged window begins, so today's silence can't flatten its own baseline.
             cur.execute(
-                "/* hb:trend */ SELECT wire, sum(opportunity_count) FROM scout_runs "
+                "/* hb:trend */ SELECT wire, (created_at AT TIME ZONE 'UTC')::date AS day, "
+                "sum(opportunity_count) FROM scout_runs "
                 "WHERE status = 'ok' AND created_at > now() - interval '30 days' "
                 "AND created_at <= now() - (%s || ' hours')::interval "
-                "GROUP BY wire, (created_at AT TIME ZONE 'UTC')::date",
+                "GROUP BY wire, day",
                 (str(hours),),
             )
-            trends = summarize_trend([(w, n) for w, n in cur.fetchall() if w in wires])
+            trends = summarize_trend([(w, d, n) for w, d, n in cur.fetchall() if w in wires])
     finally:
         conn.close()
     return counts, runs, trends
