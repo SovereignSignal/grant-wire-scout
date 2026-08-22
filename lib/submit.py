@@ -4,7 +4,8 @@
 POSTs the producer payload to wire-room-ops `POST /api/scan/submit` (internal-key auth).
 The Wire Room's intake JSON parser reads the `opportunities` array verbatim, dedups against
 seen_urls/seen_names, runs its Gate-2 classifier, and queues survivors for operator review —
-so the scout is a first-class ingestion source (scan_source='claude-code'), no shared
+so the scout is a first-class ingestion source (scan_source from SCOUT_SCAN_SOURCE,
+default 'claude-code'; the Grok Build lane uses 'grok-scout'), no shared
 filesystem with the Stringer required. This is what makes the scout host-agnostic.
 
 Security (the internal key is a real credential, treat it like one):
@@ -27,7 +28,7 @@ import urllib.request
 import urllib.error
 from urllib.parse import urlparse
 
-SOURCE = "claude-code"  # becomes scan_source; the heartbeat watches this exact value
+DEFAULT_SOURCE = "claude-code"  # heartbeat watches this unless SCOUT_SCAN_SOURCE is set
 
 # Retry only transient delivery failures (rate-limit / gateway / network). Permanent 4xx
 # (400/401/403/404) are NOT retried — fail fast so the alert is actionable.
@@ -63,11 +64,13 @@ def main(opps_path, wire, variant, scan_date, api_base=None):
         print(f"submit: no opportunities in {opps_path} — nothing to deliver (not an error)")
         return 0
 
+    source = os.environ.get("SCOUT_SCAN_SOURCE", DEFAULT_SOURCE)
+
     body = json.dumps({
         "wire": wire,
         "promptVariant": variant,            # 'A' | 'B'
         "scanDate": scan_date,               # YYYY-MM-DD
-        "source": SOURCE,
+        "source": source,
         "rawText": json.dumps({"opportunities": opps}),
     }).encode()
 

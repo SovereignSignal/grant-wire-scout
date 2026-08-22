@@ -19,7 +19,10 @@ def classify(raw_path):
     if not isinstance(d, dict):
         return "OTHER"
 
-    blob = " ".join(str(d.get(k) or "") for k in ("api_error_status", "result", "subtype", "error")).lower()
+    blob = " ".join(
+        str(d.get(k) or "")
+        for k in ("api_error_status", "result", "subtype", "error", "text", "stopReason", "message")
+    ).lower()
     # QUOTA (genuine usage/rate signals) is checked BEFORE AUTH so a quota failure
     # wins even when its message also mentions tokens.
     if any(s in blob for s in (
@@ -36,12 +39,14 @@ def classify(raw_path):
         "401", "403", "unauthor", "forbidden", "oauth", "authentication", "credential",
         "setup-token", "invalid api key", "login",
         "invalid token", "expired token", "token expired",
+        "xai_api_key", "not authenticated", "unauthenticated", "device-auth",
     )):
         return "AUTH"
     if d.get("is_error"):
         return "OTHER"
     # exited non-zero but no error envelope and nothing usable produced → empty/parse failure
-    if not (d.get("result") or d.get("opportunities")):
+    # Claude wraps the answer in `result`; Grok Build wraps it in `text`.
+    if not (d.get("result") or d.get("opportunities") or d.get("text")):
         return "EMPTY"
     return "OTHER"
 

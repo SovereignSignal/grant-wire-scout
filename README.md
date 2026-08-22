@@ -1,6 +1,9 @@
 # grant-wire-scout
 
-**The Grant Wire's scout** — a scheduled Claude Code producer that discovers and source-verifies grant opportunities, A/B-tested against the (flaky/dead) Codex producer. Slots in as a 7th cohort alongside the Stringer's existing intake sources, one layer upstream of the Wire Room.
+**The Grant Wire's scout** — scheduled producers (Claude Code + a parallel Grok Build lane)
+that discover and source-verify grant opportunities. Slots in as a 7th cohort alongside the
+Stringer's existing intake sources, one layer upstream of the Wire Room. Claude stays the
+default Railway cron; Grok is a third service on the same image, not a replacement.
 
 ## Why
 
@@ -24,8 +27,12 @@ Stringer intake (Hermes cron 12:00 UTC) ──► reads cohorts + Notion DB ─�
 |---|---|
 | `prompts/producer.md` | Wire-parameterized producer prompt (discovery → source-verify → currency-gate → JSON) |
 | `schemas/opportunity.schema.json` | Strict output contract (Wire Room `scan_entries` shape + producer attribution) |
-| `run-producer.sh` | Wrapper: render prompt → `claude -p` → extract → dedup → artifact |
-| `lib/extract.py` | Pull producer JSON out of the `claude -p` JSON envelope; render report.md |
+| `run-producer.sh` | Wrapper: render prompt → `claude -p` or `grok -p` → extract → dedup → artifact |
+| `bin/run-all.sh` | Claude cron tick (default `SCOUT_ENGINE=claude`) |
+| `bin/run-grok-all.sh` | Grok Build cron tick (`scan_source=grok-scout`, variant A) |
+| `lib/extract.py` | Pull producer JSON out of the Claude `.result` or Grok `.text` envelope |
+| `lib/hydrate_grok_auth.py` | Write `GROK_AUTH_JSON` to `$GROK_HOME/auth.json` before `grok -p` |
+| `railway.grok.toml` | Third Railway service: same image, `0 6 * * *` |
 | `lib/dedup.py` | Drop URLs already in Wire Room (`/api/scan/seen-urls`) |
 | `runs/<wire>/<variant>/<run_id>/` | Per-run artifact: `opportunities.json`, `report.md`, `raw.json`, `meta.json` |
 
@@ -49,14 +56,29 @@ Both run daily per wire; scored by **promotion rate per producer** over the wind
 ## Run it
 
 ```bash
-# locally (M5 has Claude Code installed):
+# locally (needs Claude Code installed):
 ./run-producer.sh --wire crypto --variant A
 # → runs/<wire>/A/<run_id>/{opportunities.json,report.md,...}
+
+# Grok Build lane (needs `grok` on PATH + `grok login` or GROK_AUTH_JSON):
+./run-producer.sh --wire crypto --variant A --engine grok
 
 # with Wire Room dedup (optional, needs wire-room-ops reachable + internal key):
 WIRE_ROOM_API=https://wire-room-ops-production.up.railway.app \
 INTERNAL_API_KEY=... ./run-producer.sh --wire ai --variant A
 ```
+
+## Parallel Grok Build lane (Railway)
+
+Same Docker image as Claude + heartbeat. New service via `railway.grok.toml`:
+`bin/run-grok-all.sh` at **06:00 UTC** (Claude stays **04:00**). Submits
+`scan_source=grok-scout` (already in Wire Room's `SCAN_SOURCES`); JSON `"producer": "grok-build"`.
+Auth is `GROK_AUTH_JSON` (contents of `~/.grok/auth.json` from `grok login`) — subscription,
+not `XAI_API_KEY` unless you want an API bill. Sessions expire ~7 days. Default model is
+`grok-4.6` (current Grok Build flagship); set `GROK_MODEL=grok-4.7` when it ships.
+
+See [DEPLOY.md](DEPLOY.md) for the third-service checklist. Claude cron behavior is unchanged
+if you never add the Grok service.
 
 ## Auth model — Claude Code subscription, NOT API keys
 
@@ -96,6 +118,7 @@ intake. The Stringer's weekly cron-review job will then observe it like every ot
 
 - [x] Prompt + schema + wrapper + helpers
 - [x] Live local validation (M5) — see `runs/`
+- [x] Parallel Grok Build engine on the same Railway image (`railway.grok.toml`)
 - [ ] Install + auth `claude` on thestringer
 - [ ] Notion DB access (or cohort-dir intake path)
 - [ ] Hermes cron job (per wire, variant A + B)

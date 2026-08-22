@@ -1,7 +1,9 @@
-# Heartbeat cron service — the dead-man's-switch.
-# Create a SECOND Railway service from this same repo and set its "Config file path"
-# (Settings -> Config-as-code) to railway.heartbeat.toml. Needs DATABASE_URL + the Resend
-# alert vars; no volume needed (it never calls claude).
+# Heartbeat cron service — the dead-man's-switch for the Claude scout by default
+# (scan_source=claude-code). Create a SECOND Railway service from this same repo and set
+# its "Config file path" (Settings -> Config-as-code) to railway.heartbeat.toml. Needs
+# DATABASE_URL + the Resend alert vars; no volume needed (it never calls claude or grok).
+# To watch the Grok Build lane instead, set SCOUT_SCAN_SOURCE=grok-scout on a *separate*
+# heartbeat service — do not mix both sources into one email.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"

@@ -19,6 +19,11 @@ def main(opp_path: str, out_report: str, raw_path: str) -> int:
     rej = payload.get("rejected", [])
     wire = payload.get("wire", "?")
     variant = payload.get("variant", "?")
+    producer = payload.get("producer") or "claude-code"
+    title = {
+        "claude-code": "Claude Code Producer",
+        "grok-build": "Grok Build Producer",
+    }.get(producer, f"{producer} Producer")
 
     verified = [o for o in opps if o.get("verified") is True]
     partial = [o for o in opps if o.get("verification", {}).get("status") == "partial"]
@@ -26,7 +31,7 @@ def main(opp_path: str, out_report: str, raw_path: str) -> int:
     has_vf = any("verification" in o for o in opps)
 
     lines = [
-        f"# Claude Code Producer — {wire} / variant {variant}",
+        f"# {title} — {wire} / variant {variant}",
         "",
         f"- Run: `{payload.get('run_id', '?')}`",
         f"- Generated: {payload.get('generated_at', '?')}",

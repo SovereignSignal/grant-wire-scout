@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""extract.py — pull the producer JSON payload out of a `claude -p --output-format json` run.
+"""extract.py — pull the producer JSON payload out of a headless CLI JSON run.
 
-`claude -p --output-format json` wraps the model's answer in a result envelope under
-`.result` (a string). The model is instructed to return ONLY a JSON object. We:
-  1. Read the envelope, take .result.
+`claude -p --output-format json` wraps the model's answer under `.result` (a string).
+`grok -p --output-format json` wraps it under `.text` (plus sessionId / stopReason).
+The model is instructed to return ONLY a JSON object. We:
+  1. Read the envelope, take the result text (Claude `.result`, Grok `.text`, …).
   2. Strip any stray markdown fences / leading prose defensively.
   3. json.loads it, validate the top-level shape.
   4. Write opportunities.json (the payload).
@@ -37,6 +38,32 @@ REQUIRED_ITEM_KEYS = (
 
 # Top-level metadata keys we try to recover on salvage (all precede the array).
 META_KEYS = ("producer", "variant", "wire", "generated_at", "run_id")
+
+# Headless envelopes: Claude uses `result`; Grok Build uses `text` (+ sessionId).
+# Also accept a few aliases so a CLI rename doesn't drop a whole run.
+_ENVELOPE_TEXT_KEYS = ("result", "text", "output", "message", "response", "content")
+
+
+def _is_payload(obj) -> bool:
+    return isinstance(obj, dict) and "opportunities" in obj
+
+
+def split_envelope(raw: dict):
+    """Return (payload_dict_or_None, result_text).
+
+    Grok's JSON object is `{text, stopReason, sessionId, ...}`. Claude's is
+    `{result, total_cost_usd, ...}`. Either CLI may also write the producer
+    payload as the top-level object (no envelope) or nest it as a dict.
+    """
+    if _is_payload(raw) and "producer" in raw:
+        return raw, ""
+    for k in _ENVELOPE_TEXT_KEYS:
+        v = raw.get(k)
+        if _is_payload(v):
+            return v, ""
+        if isinstance(v, str) and v.strip():
+            return None, v
+    return None, ""
 
 
 def _loads(text: str) -> dict:
@@ -188,21 +215,20 @@ def main(raw_path: str, out_json: str) -> int:
         Path(out_json).write_text(json.dumps(payload, indent=2))
         return 0
     if raw.get("is_error"):
-        raise SystemExit(f"claude run errored: {raw.get('api_error_status')}")
-    # Accept either shape: the `claude -p` envelope (payload under .result, as Opus
-    # emits) OR the bare payload written straight to stdout (observed with Sonnet).
-    # The producer must not depend on the model's stdout-envelope shape.
-    if "opportunities" in raw and "producer" in raw:
-        payload = raw
-        # HAPPY PATH (bare payload): keep the required-top-level-key check.
+        raise SystemExit(
+            f"producer run errored: {raw.get('api_error_status') or raw.get('stopReason') or raw.get('error')}"
+        )
+    # Accept either shape: a CLI envelope (Claude `.result`, Grok `.text`) OR the
+    # bare payload written straight to stdout. The producer must not depend on
+    # the model's stdout-envelope shape.
+    payload, result_text = split_envelope(raw)
+    if payload is not None:
         for k in REQUIRED_TOP_KEYS:
             if k not in payload:
                 raise SystemExit(f"payload missing required key '{k}'")
     else:
-        result_text = raw.get("result", "")
         try:
             payload = coerce_payload(result_text)
-            # HAPPY PATH: keep the required-top-level-key check.
             for k in REQUIRED_TOP_KEYS:
                 if k not in payload:
                     raise SystemExit(f"payload missing required key '{k}'")

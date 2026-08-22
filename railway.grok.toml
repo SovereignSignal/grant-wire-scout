@@ -1,0 +1,18 @@
+# Grok Build scout cron — PARALLEL to the Claude scout, not a replacement.
+# Create a THIRD Railway service from this same repo and set its "Config file path"
+# (Settings -> Config-as-code) to railway.grok.toml. Same Dockerfile as Claude + heartbeat.
+#
+# Auth: GROK_AUTH_JSON (contents of ~/.grok/auth.json from `grok login` — grok.com / SuperGrok).
+# Do NOT set XAI_API_KEY unless you accept a console.x.ai bill; the subscription path is
+# GROK_AUTH_JSON. Tokens from `grok login` expire (~7 days) — rotate the env var.
+#
+# Staggered after Claude (04:00 UTC) so Claude's finds are in the seen-url set before Grok
+# hunts; Grok's edge is a different index (X-first), not a race to submit first.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "bin/run-grok-all.sh"
+cronSchedule = "0 6 * * *"
+restartPolicyType = "NEVER"
