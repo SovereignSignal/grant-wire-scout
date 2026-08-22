@@ -1,14 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Claude Code Grant Producer — run output",
-  "description": "The contract a Claude Code producer run emits. Matches Wire Room scan_entries shape (name, source_url, amount, deadline, wire, classification, quality_score) plus producer-attribution metadata so the Stringer intake and the A/B split can attribute promotions per producer.",
+  "title": "Grant Producer — run output",
+  "description": "The contract a producer run (Claude Code or Grok Build) emits. Matches Wire Room scan_entries shape (name, source_url, amount, deadline, wire, classification, quality_score) plus producer-attribution metadata so intake and the A/B split can attribute promotions per producer.",
   "type": "object",
   "required": ["producer", "variant", "wire", "generated_at", "opportunities"],
   "properties": {
-    "producer": { "const": "claude-code" },
+    "producer": { "type": "string", "enum": ["claude-code", "grok-build"] },
     "variant": { "type": "string", "enum": ["A", "B"] },
     "wire": { "type": "string", "enum": ["crypto", "ai", "oss"] },
-    "run_id": { "type": "string", "description": "claude-code-<ISO ts>Z" },
+    "run_id": { "type": "string", "description": "claude-code-<ISO ts>Z or grok-build-<ISO ts>Z" },
     "generated_at": { "type": "string", "format": "date-time" },
     "opportunities": {
       "type": "array",
@@ -26,7 +26,7 @@
           "fit_score": { "type": "integer", "minimum": 0, "maximum": 100 },
           "fit_reason": { "type": "string" },
           "evidence": { "type": "array", "items": { "type": "string" }, "description": "Verified source URLs" },
-          "discovered_via": { "type": "string", "enum": ["web_search", "web_fetch", "source_list"] }
+          "discovered_via": { "type": "string", "enum": ["web_search", "web_fetch", "source_list", "x_search", "x_keyword_search", "x_semantic_search"] }
         }
       }
     },

@@ -43,6 +43,9 @@ on a successful detection meant every true alert arrived twice, once mislabelled
 Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (default 26),
      SCOUT_WIRES (default "crypto ai oss", whitespace-separated expected wires),
      plus RESEND_API_KEY + NOTIFICATION_EMAIL + ALERT_FROM (used by lib/notify.py).
+     SCOUT_SCAN_SOURCE (default claude-code) selects which queue this monitor watches;
+     a second heartbeat with SCOUT_SCAN_SOURCE=grok-scout watches the Grok Build lane.
+     Ledger rows are scoped by run_id prefix so Claude and Grok ticks don't diagnose each other.
 """
 import os
 import statistics
@@ -50,7 +53,22 @@ import subprocess
 import sys
 from collections import namedtuple
 
-SOURCE = "claude-code"  # must match lib/submit.py's SOURCE
+SOURCE = os.environ.get("SCOUT_SCAN_SOURCE", "claude-code")  # must match lib/submit.py
+
+# Map scan_source → scout_runs.run_id prefix (run-producer.sh: ${PRODUCER}-${ts}).
+# Without this, a Grok AUTH would make the Claude heartbeat scream, and vice versa.
+_RUN_ID_PREFIX = {
+    "claude-code": "claude-code-",
+    "grok-scout": "grok-build-",
+}
+
+
+def run_id_prefix(source=None):
+    source = source if source is not None else SOURCE
+    explicit = (os.environ.get("SCOUT_RUN_ID_PREFIX") or "").strip()
+    if explicit:
+        return explicit if explicit.endswith("-") else explicit + "-"
+    return _RUN_ID_PREFIX.get(source, source.rstrip("-") + "-")
 
 # wire: the wire; silent: nothing reached the queue; cause: machine-readable code; text: the why.
 Diagnosis = namedtuple("Diagnosis", "wire silent cause text")
@@ -158,9 +176,18 @@ def diagnose_wire(wire, count, run, trend=None):
     opps = run[1] or 0
 
     if status == "auth":
-        return Diagnosis(wire, True, "auth",
-                         "a run failed AUTH — the claude token was rejected. Re-run "
-                         "`claude setup-token` and update CLAUDE_CODE_OAUTH_TOKEN on the scout service.")
+        if SOURCE == "claude-code":
+            remedy = (
+                "a run failed AUTH — the claude token was rejected. Re-run "
+                "`claude setup-token` and update CLAUDE_CODE_OAUTH_TOKEN on the scout service."
+            )
+        else:
+            remedy = (
+                "a run failed AUTH — Grok Build credentials were rejected. Refresh "
+                "GROK_AUTH_JSON from `grok login` (contents of ~/.grok/auth.json) on the "
+                "grok-scout service, or set XAI_API_KEY."
+            )
+        return Diagnosis(wire, True, "auth", remedy)
     if status == "quota":
         return Diagnosis(wire, True, "quota",
                          "a run hit the Max usage cap (QUOTA) and produced nothing.")
@@ -201,11 +228,15 @@ def _fetch(dsn, hours, wires):
         with conn.cursor() as cur:
             # EVERY run in the window we're judging, not just the newest — a wire runs once per
             # prompt variant per tick. "No rows" still means "no run happened in the window".
+            # run_id prefix keeps Claude's heartbeat from reading Grok Build ledger rows
+            # (same table, two producers).
+            like = run_id_prefix() + "%"
             cur.execute(
                 "/* hb:runs */ SELECT wire, status, opportunity_count FROM scout_runs "
                 "WHERE created_at > now() - (%s || ' hours')::interval "
+                "AND run_id LIKE %s "
                 "ORDER BY wire, created_at",
-                (str(hours),),
+                (str(hours), like),
             )
             grouped = {}
             for w, s, n in cur.fetchall():
@@ -221,8 +252,9 @@ def _fetch(dsn, hours, wires):
                 "sum(opportunity_count) FROM scout_runs "
                 "WHERE status = 'ok' AND created_at > now() - interval '30 days' "
                 "AND created_at <= now() - (%s || ' hours')::interval "
+                "AND run_id LIKE %s "
                 "GROUP BY wire, day",
-                (str(hours),),
+                (str(hours), like),
             )
             trends = summarize_trend([(w, d, n) for w, d, n in cur.fetchall() if w in wires])
     finally:
