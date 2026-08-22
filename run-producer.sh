@@ -169,14 +169,20 @@ if [[ "$ENGINE" == "grok" ]]; then
   python3 "${PRODUCER_ROOT}/lib/hydrate_grok_auth.py"
   GROK_BIN="${GROK:-grok}"
   # Headless: --always-approve is required (without it, tool calls are auto-cancelled).
-  # workspace sandbox allows network for X/web fetch; --no-auto-update keeps stdout clean.
+  # --no-auto-update keeps stdout clean. Do NOT pass --sandbox workspace on Railway:
+  # Grok CLI 1.0.5 shells out to bubblewrap and REFUSES to start if bwrap is missing
+  # (`bwrap exec failed: No such file or directory`). The container is already isolated;
+  # optional GROK_SANDBOX=workspace|strict for hosts that have bubblewrap.
   # Tools stay at Grok defaults so X Search + web_fetch remain available (the index edge).
-  "${TIMEOUT[@]}" "$GROK_BIN" --no-auto-update -p "$(cat "$PROMPT_FILE")" \
-    --model "$MODEL" \
-    --output-format json \
-    --always-approve \
-    --sandbox workspace \
-    --max-turns "${SCOUT_MAX_TURNS:-100}" \
+  GROK_ARGS=(--no-auto-update -p "$(cat "$PROMPT_FILE")"
+    --model "$MODEL"
+    --output-format json
+    --always-approve
+    --max-turns "${SCOUT_MAX_TURNS:-100}")
+  if [[ -n "${GROK_SANDBOX:-}" && "${GROK_SANDBOX}" != "off" ]]; then
+    GROK_ARGS+=(--sandbox "$GROK_SANDBOX")
+  fi
+  "${TIMEOUT[@]}" "$GROK_BIN" "${GROK_ARGS[@]}" \
     > "$RAW_JSON"
 else
   CLAUDE="${CLAUDE:-claude}"
