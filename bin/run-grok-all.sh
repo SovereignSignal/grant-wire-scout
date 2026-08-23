@@ -10,5 +10,6 @@ export SERVICE_ROLE="${SERVICE_ROLE:-grok-scout}"
 export SCOUT_ENGINE=grok
 export SCOUT_SCAN_SOURCE="${SCOUT_SCAN_SOURCE:-grok-scout}"
 export SCOUT_VARIANTS="${SCOUT_VARIANTS:-A}"
+export SCOUT_WIRES="${SCOUT_WIRES:-crypto ai oss}"
 export GROK_MODEL="${GROK_MODEL:-grok-4.6}"
 exec "$ROOT/bin/run-all.sh"

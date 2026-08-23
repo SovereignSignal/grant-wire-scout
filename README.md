@@ -71,7 +71,8 @@ INTERNAL_API_KEY=... ./run-producer.sh --wire ai --variant A
 ## Parallel Grok Build lane (Railway)
 
 Same Docker image as Claude + heartbeat. New service via `railway.grok.toml`:
-`bin/run-grok-all.sh` at **06:00 UTC** (Claude stays **04:00**). Submits
+`bin/run-grok-all.sh` at **06:00 UTC** (Claude stays **04:00**). Runs **crypto, ai, and
+oss** (variant A). Submits
 `scan_source=grok-scout` (already in Wire Room's `SCAN_SOURCES`); JSON `"producer": "grok-build"`.
 Auth is `GROK_AUTH_JSON` (contents of `~/.grok/auth.json` from `grok login`) — subscription,
 not `XAI_API_KEY` unless you want an API bill. Sessions expire ~7 days. Default model is

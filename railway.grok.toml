@@ -8,6 +8,7 @@
 #
 # Staggered after Claude (04:00 UTC) so Claude's finds are in the seen-url set before Grok
 # hunts; Grok's edge is a different index (X-first), not a race to submit first.
+# Wires default to crypto + ai + oss (SCOUT_WIRES); variant A only.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
