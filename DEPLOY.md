@@ -44,7 +44,7 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
      the new JSON. Do **not** set `XAI_API_KEY` unless you accept a console.x.ai API bill.
    - `GROK_MODEL=grok-4.6` (Grok Build flagship as of 2026-08-12). Flip to `grok-4.7` the day
      it ships in Grok Build — do not leave a 4.7 default that the CLI cannot resolve.
-   - Start conservative: `SCOUT_WIRES=crypto` (script already pins `SCOUT_VARIANTS=A`).
+   - Wires: `SCOUT_WIRES=crypto ai oss` (same set as Claude). Script pins `SCOUT_VARIANTS=A`.
    - Stagger is deliberate: Claude at 04:00 UTC, Grok at 06:00, so Claude's finds are already
      in the seen-url set. Grok's edge is X-first discovery, not a race to submit first.
 
@@ -59,8 +59,8 @@ Trigger ONE manual run on the Claude scout service and watch:
 - `submit: delivered N opportunities…` and the entries appearing in the Wire Room queue.
 Then trust the `0 4 * * *` cron.
 
-For Grok: same, one manual deploy of the grok-scout service with `SCOUT_WIRES=crypto`. Confirm
-`scan_source=grok-scout` in the Wire Room, then widen wires.
+For Grok: same, one manual deploy of the grok-scout service. Confirm
+`scan_source=grok-scout` in the Wire Room. Default wires are `crypto ai oss`.
 
 ## Operating
 - **Alerts are exception-only** (`AUTH` / `QUOTA` / `EMPTY` / `DELIVERY` / `FAILED`), plus the
