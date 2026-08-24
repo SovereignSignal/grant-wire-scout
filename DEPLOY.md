@@ -41,7 +41,9 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
    - **`GROK_AUTH_JSON`** — contents of `~/.grok/auth.json` after `grok login` on a machine with
      a browser. This rides grok.com / SuperGrok, same idea as `CLAUDE_CODE_OAUTH_TOKEN`.
      Access tokens last ~6h; the CLI refreshes them on disk. Attach a volume at
-     `/app/home/.grok` (`GROK_HOME`) so the refreshed file survives until the next cron.
+     `/app/grok-session` and set `GROK_HOME=/app/grok-session` so the refreshed
+     file survives until the next cron. Do **not** mount over `/app/home/.grok`
+     — that directory also holds the Grok CLI binary in the image.
      Hydrate keeps that on-disk session unless you put a *newer* `GROK_AUTH_JSON` (re-login).
      When the lane AUTH-alerts anyway, re-run `grok login` and replace the env var.
      Do **not** set `XAI_API_KEY` unless you accept a console.x.ai API bill.

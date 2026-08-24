@@ -5,7 +5,8 @@ Grok Build reads `~/.grok/auth.json` (override with GROK_HOME) from `grok login`
 or falls back to `XAI_API_KEY`. Access tokens in that file last ~6h; the CLI
 refreshes them on disk using `refresh_token`. Cron containers are ephemeral, so
 a volume at GROK_HOME is required for the refreshed file to survive until the
-next tick. GROK_AUTH_JSON is the bootstrap / re-login seed.
+next tick. On Railway that is `/app/grok-session`, not `/app/home/.grok` (the
+CLI binary lives under the latter). GROK_AUTH_JSON is the bootstrap / re-login seed.
 
 Env:
   GROK_AUTH_JSON  contents of auth.json from `grok login` (preferred — grok.com / SuperGrok)
