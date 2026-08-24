@@ -2,9 +2,10 @@
 """hydrate_grok_auth.py — materialize Grok Build credentials for a headless run.
 
 Grok Build reads `~/.grok/auth.json` (override with GROK_HOME) from `grok login`,
-or falls back to `XAI_API_KEY`. Railway has no volume, so the subscription session
-is passed the same way Claude's is: a long-lived blob in an env var, written to
-disk just before `grok -p`.
+or falls back to `XAI_API_KEY`. Access tokens in that file last ~6h; the CLI
+refreshes them on disk using `refresh_token`. Cron containers are ephemeral, so
+a volume at GROK_HOME is required for the refreshed file to survive until the
+next tick. GROK_AUTH_JSON is the bootstrap / re-login seed.
 
 Env:
   GROK_AUTH_JSON  contents of auth.json from `grok login` (preferred — grok.com / SuperGrok)
@@ -35,6 +36,39 @@ def has_auth() -> bool:
     return (grok_home() / "auth.json").is_file() and (grok_home() / "auth.json").stat().st_size > 0
 
 
+def _sessions(obj: dict) -> list[dict]:
+    sessions: list[dict] = []
+    marker_keys = ("refresh_token", "access_token", "expires_at", "create_time", "key")
+    if any(k in obj for k in marker_keys):
+        sessions.append(obj)
+    for v in obj.values():
+        if isinstance(v, dict) and any(k in v for k in marker_keys):
+            sessions.append(v)
+    return sessions
+
+
+def session_stamp(obj: dict) -> str:
+    """Best-effort recency: create_time, else expires_at. Empty if unknown."""
+    stamps = []
+    for s in _sessions(obj):
+        t = s.get("create_time") or s.get("expires_at") or ""
+        if t:
+            stamps.append(str(t))
+    return max(stamps) if stamps else ""
+
+
+def has_refresh(obj: dict) -> bool:
+    return any(bool(s.get("refresh_token")) for s in _sessions(obj))
+
+
+def _load_json_file(path: Path) -> dict | None:
+    try:
+        parsed = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def hydrate() -> Path | None:
     blob = (os.environ.get("GROK_AUTH_JSON") or "").strip()
     if not blob:
@@ -48,8 +82,19 @@ def hydrate() -> Path | None:
     home = grok_home()
     home.mkdir(parents=True, exist_ok=True)
     path = home / "auth.json"
+    existing = _load_json_file(path) if path.is_file() and path.stat().st_size > 0 else None
+    if existing is not None and has_refresh(existing):
+        disk_ts = session_stamp(existing)
+        env_ts = session_stamp(parsed)
+        # Keep a volume-resident refresh if it is at least as new as the env seed.
+        # A newer GROK_AUTH_JSON (re-login) still wins.
+        if disk_ts and (not env_ts or disk_ts >= env_ts):
+            os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+            print("hydrate_grok_auth: keeping on-disk session (newer than GROK_AUTH_JSON)")
+            return path
     path.write_text(json.dumps(parsed))
     os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    print("hydrate_grok_auth: wrote GROK_AUTH_JSON to disk")
     return path
 
 

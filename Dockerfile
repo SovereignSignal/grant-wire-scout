@@ -31,7 +31,8 @@ RUN chmod +x bin/*.sh run-producer.sh
 
 # Claude auth = CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`).
 # Grok auth  = GROK_AUTH_JSON (contents of ~/.grok/auth.json from `grok login`),
-#              hydrated at cron start by lib/hydrate_grok_auth.py. No volume needed.
+#              hydrated at cron start by lib/hydrate_grok_auth.py. Mount a volume at
+#              /app/home/.grok so CLI refresh tokens survive between cron ticks.
 RUN mkdir -p "$HOME/.claude"
 
 # Overridden per Railway service:

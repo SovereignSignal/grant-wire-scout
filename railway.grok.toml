@@ -4,7 +4,8 @@
 #
 # Auth: GROK_AUTH_JSON (contents of ~/.grok/auth.json from `grok login` — grok.com / SuperGrok).
 # Do NOT set XAI_API_KEY unless you accept a console.x.ai bill; the subscription path is
-# GROK_AUTH_JSON. Tokens from `grok login` expire (~7 days) — rotate the env var.
+# GROK_AUTH_JSON. Access tokens last ~6h; mount a volume at /app/home/.grok so refresh
+# survives. Rotate GROK_AUTH_JSON only after a fresh `grok login`.
 #
 # Staggered after Claude (04:00 UTC) so Claude's finds are in the seen-url set before Grok
 # hunts; Grok's edge is a different index (X-first), not a race to submit first.

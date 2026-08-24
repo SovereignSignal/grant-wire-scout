@@ -40,8 +40,11 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
    `DATABASE_URL` for the ledger), plus:
    - **`GROK_AUTH_JSON`** — contents of `~/.grok/auth.json` after `grok login` on a machine with
      a browser. This rides grok.com / SuperGrok, same idea as `CLAUDE_CODE_OAUTH_TOKEN`.
-     **Sessions expire (~7 days).** When the lane AUTH-alerts, re-run `grok login` and paste
-     the new JSON. Do **not** set `XAI_API_KEY` unless you accept a console.x.ai API bill.
+     Access tokens last ~6h; the CLI refreshes them on disk. Attach a volume at
+     `/app/home/.grok` (`GROK_HOME`) so the refreshed file survives until the next cron.
+     Hydrate keeps that on-disk session unless you put a *newer* `GROK_AUTH_JSON` (re-login).
+     When the lane AUTH-alerts anyway, re-run `grok login` and replace the env var.
+     Do **not** set `XAI_API_KEY` unless you accept a console.x.ai API bill.
    - `GROK_MODEL=grok-4.6` (Grok Build flagship as of 2026-08-12). Flip to `grok-4.7` the day
      it ships in Grok Build — do not leave a 4.7 default that the CLI cannot resolve.
    - Wires: `SCOUT_WIRES=crypto ai oss` (same set as Claude). Script pins `SCOUT_VARIANTS=A`.
