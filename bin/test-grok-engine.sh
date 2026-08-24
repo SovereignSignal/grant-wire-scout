@@ -133,9 +133,77 @@ out="$(env -u GROK_AUTH_JSON -u XAI_API_KEY GROK_HOME="$TMP/empty-grok" \
 [ "$rc" -eq 2 ] && ok "hydrate with no credentials -> rc=2" || bad "hydrate empty rc=$rc (want 2)"
 export GROK_HOME="$TMP/grokhome"
 export GROK_AUTH_JSON='{"access_token":"test-token"}'
-python3 "$ROOT/lib/hydrate_grok_auth.py" >/dev/null; rc=$?
+hout="$(python3 "$ROOT/lib/hydrate_grok_auth.py" 2>&1)"; rc=$?
 [ "$rc" -eq 0 ] && [ -s "$TMP/grokhome/auth.json" ] \
   && ok "hydrate writes auth.json mode 600-able" || bad "hydrate did not write auth.json"
+printf '%s\n' "$hout" | grep -q "wrote GROK_AUTH_JSON" \
+  && ok "hydrate logs a write on seed" || bad "hydrate write log missing"
+
+# On-disk refresh newer than env seed must survive (Railway volume case).
+python3 - "$TMP/volhome" "$ROOT" <<'PY'
+import json, os, sys, subprocess
+vol, root = sys.argv[1], sys.argv[2]
+os.makedirs(vol, exist_ok=True)
+disk = {
+    "https://auth.x.ai::test": {
+        "create_time": "2026-08-24T13:00:00Z",
+        "expires_at": "2026-08-24T19:00:00Z",
+        "refresh_token": "disk-refresh",
+        "email": "disk@example.com",
+    }
+}
+env = {
+    "https://auth.x.ai::test": {
+        "create_time": "2026-08-22T13:00:00Z",
+        "expires_at": "2026-08-22T19:00:00Z",
+        "refresh_token": "env-refresh",
+        "email": "env@example.com",
+    }
+}
+open(os.path.join(vol, "auth.json"), "w").write(json.dumps(disk))
+envp = os.environ.copy()
+envp["GROK_HOME"] = vol
+envp["GROK_AUTH_JSON"] = json.dumps(env)
+envp.pop("XAI_API_KEY", None)
+r = subprocess.run(["python3", os.path.join(root, "lib/hydrate_grok_auth.py")],
+                   env=envp, capture_output=True, text=True)
+got = json.load(open(os.path.join(vol, "auth.json")))
+inner = next(iter(got.values()))
+ok = r.returncode == 0 and inner.get("refresh_token") == "disk-refresh" and "keeping on-disk" in r.stdout
+sys.exit(0 if ok else 1)
+PY
+[ $? -eq 0 ] && ok "hydrate keeps newer on-disk session" || bad "hydrate clobbered newer on-disk session"
+
+# Re-login: newer env seed must replace a stale volume file.
+python3 - "$TMP/volhome2" "$ROOT" <<'PY'
+import json, os, sys, subprocess
+vol, root = sys.argv[1], sys.argv[2]
+os.makedirs(vol, exist_ok=True)
+disk = {
+    "https://auth.x.ai::test": {
+        "create_time": "2026-08-22T13:00:00Z",
+        "refresh_token": "disk-refresh",
+    }
+}
+env = {
+    "https://auth.x.ai::test": {
+        "create_time": "2026-08-24T13:51:00Z",
+        "refresh_token": "env-refresh",
+    }
+}
+open(os.path.join(vol, "auth.json"), "w").write(json.dumps(disk))
+envp = os.environ.copy()
+envp["GROK_HOME"] = vol
+envp["GROK_AUTH_JSON"] = json.dumps(env)
+envp.pop("XAI_API_KEY", None)
+r = subprocess.run(["python3", os.path.join(root, "lib/hydrate_grok_auth.py")],
+                   env=envp, capture_output=True, text=True)
+got = json.load(open(os.path.join(vol, "auth.json")))
+inner = next(iter(got.values()))
+ok = r.returncode == 0 and inner.get("refresh_token") == "env-refresh" and "wrote GROK_AUTH_JSON" in r.stdout
+sys.exit(0 if ok else 1)
+PY
+[ $? -eq 0 ] && ok "hydrate writes newer env seed over stale disk" || bad "hydrate did not replace stale disk"
 unset GROK_AUTH_JSON
 
 echo "== 5. happy path: stub grok -> submit source=grok-scout, no alert =="
