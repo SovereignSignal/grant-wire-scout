@@ -37,7 +37,7 @@ RUN chmod +x bin/*.sh run-producer.sh
 RUN mkdir -p "$HOME/.claude"
 
 # Overridden per Railway service:
-#   scout cron      -> bin/run-all.sh            (cronSchedule "0 4 * * *")
-#   grok-scout cron -> bin/run-grok-all.sh       (cronSchedule "0 6 * * *")
+#   scout cron      -> bin/run-all.sh            (cronSchedule "0 4 * * 0,2,4,6")
+#   grok-scout cron -> bin/run-grok-all.sh       (cronSchedule "0 6 * * 1,3,5")
 #   heartbeat cron  -> python3 lib/heartbeat.py  (cronSchedule "0 14 * * *")
 CMD ["bin/run-all.sh"]

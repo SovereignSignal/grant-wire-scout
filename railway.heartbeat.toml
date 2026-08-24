@@ -4,6 +4,8 @@
 # DATABASE_URL + the Resend alert vars; no volume needed (it never calls claude or grok).
 # To watch the Grok Build lane instead, set SCOUT_SCAN_SOURCE=grok-scout on a *separate*
 # heartbeat service — do not mix both sources into one email.
+# Claude only runs Sun/Tue/Thu/Sat, so the longest healthy gap is ~48h (Sun→Tue). Keep
+# SCOUT_SILENCE_HOURS around 52 so Mon/Wed/Fri ticks do not page on a scheduled off-day.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"

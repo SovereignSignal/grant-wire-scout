@@ -27,8 +27,9 @@ clean empty run, reporting it as "a thin day, no action needed". collapse_runs()
 worst status wins, yields sum. Production runs variant A only today, so this was latent — it
 would have gone live the moment the A/B that bin/ab-score.sh exists to score was switched on.
 
-A zero-yield alert also carries the wire's habit (summarize_trend): the 26h window spans one
-tick and has no memory, so it cannot tell a thin day from a wire drying up. The median daily
+A zero-yield alert also carries the wire's habit (summarize_trend): the silence window spans
+one Claude tick (and, on the weekday cadence, the ~48h Sun→Tue gap) and has no memory, so it
+cannot tell a thin day from a wire drying up. The median daily
 yield and the count of prior zero days answer "is this normal for this wire?" — 2026-08-10,
 ai returned 0 for the first time in 20 run-days against a median of 3, while crypto zeroes
 roughly weekly. Identical alerts, opposite meanings.
@@ -40,7 +41,7 @@ on a successful detection meant every true alert arrived twice, once mislabelled
     1  the alert could NOT be delivered — Railway's crash mail is then the intended backstop
     2  the heartbeat could not do its job at all (no DSN, no driver, DB unreachable)
 
-Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (default 26),
+Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (default 52),
      SCOUT_WIRES (default "crypto ai oss", whitespace-separated expected wires),
      plus RESEND_API_KEY + NOTIFICATION_EMAIL + ALERT_FROM (used by lib/notify.py).
      SCOUT_SCAN_SOURCE (default claude-code) selects which queue this monitor watches;
@@ -109,8 +110,8 @@ def collapse_runs(rows):
 def summarize_trend(rows):
     """Per-wire yield habit from (wire, day, daily_total) triples — one per wire per prior day.
 
-    A single alert cannot tell "thin day" from "this wire is drying up"; the 26h window spans
-    one tick and has no memory. The median says what this wire normally returns, and the zero
+    A single alert cannot tell "thin day" from "this wire is drying up"; the silence window
+    spans one Claude tick and has no memory. The median says what this wire normally returns, and the zero
     count says whether an empty day is routine here or unprecedented.
 
     Day order matters, not just the zero count: consecutive zeros must not self-normalize.
@@ -264,7 +265,7 @@ def _fetch(dsn, hours, wires):
 
 def main():
     dsn = os.environ.get("DATABASE_URL", "")
-    hours = float(os.environ.get("SCOUT_SILENCE_HOURS", "26"))
+    hours = float(os.environ.get("SCOUT_SILENCE_HOURS", "52"))
     wires = os.environ.get("SCOUT_WIRES", "crypto ai oss").split()
     if not dsn:
         print("heartbeat: DATABASE_URL is required", file=sys.stderr)
