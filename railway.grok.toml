@@ -8,14 +8,14 @@
 # (set GROK_HOME to that path). Do not mount over /app/home/.grok — the CLI
 # binary lives there in the image. Rotate GROK_AUTH_JSON only after a fresh `grok login`.
 #
-# Staggered after Claude (04:00 UTC) so Claude's finds are in the seen-url set before Grok
-# hunts; Grok's edge is a different index (X-first), not a race to submit first.
-# Wires default to crypto + ai + oss (SCOUT_WIRES); variant A only.
+# Alternates with Claude so they do not share a quota day: Grok Mon/Wed/Fri 06:00 UTC,
+# Claude Sun/Tue/Thu/Sat 04:00 UTC. Grok's edge is a different index (X-first), not a
+# race to submit first. Wires default to crypto + ai + oss (SCOUT_WIRES); variant A only.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "bin/run-grok-all.sh"
-cronSchedule = "0 6 * * *"
+cronSchedule = "0 6 * * 1,3,5"
 restartPolicyType = "NEVER"

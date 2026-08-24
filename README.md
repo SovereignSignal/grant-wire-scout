@@ -32,7 +32,7 @@ Stringer intake (Hermes cron 12:00 UTC) ──► reads cohorts + Notion DB ─�
 | `bin/run-grok-all.sh` | Grok Build cron tick (`scan_source=grok-scout`, variant A) |
 | `lib/extract.py` | Pull producer JSON out of the Claude `.result` or Grok `.text` envelope |
 | `lib/hydrate_grok_auth.py` | Write `GROK_AUTH_JSON` to `$GROK_HOME/auth.json` before `grok -p` |
-| `railway.grok.toml` | Third Railway service: same image, `0 6 * * *` |
+| `railway.grok.toml` | Third Railway service: same image, `0 6 * * 1,3,5` (Mon/Wed/Fri) |
 | `lib/dedup.py` | Drop URLs already in Wire Room (`/api/scan/seen-urls`) |
 | `runs/<wire>/<variant>/<run_id>/` | Per-run artifact: `opportunities.json`, `report.md`, `raw.json`, `meta.json` |
 
@@ -71,15 +71,17 @@ INTERNAL_API_KEY=... ./run-producer.sh --wire ai --variant A
 ## Parallel Grok Build lane (Railway)
 
 Same Docker image as Claude + heartbeat. New service via `railway.grok.toml`:
-`bin/run-grok-all.sh` at **06:00 UTC** (Claude stays **04:00**). Runs **crypto, ai, and
+`bin/run-grok-all.sh` **Mon/Wed/Fri 06:00 UTC**; Claude is **Sun/Tue/Thu/Sat 04:00 UTC** so
+the lanes split SuperGrok / Claude Max quota. Runs **crypto, ai, and
 oss** (variant A). Submits
 `scan_source=grok-scout` (already in Wire Room's `SCAN_SOURCES`); JSON `"producer": "grok-build"`.
 Auth is `GROK_AUTH_JSON` (contents of `~/.grok/auth.json` from `grok login`) — subscription,
-not `XAI_API_KEY` unless you want an API bill. Sessions expire ~7 days. Default model is
+not `XAI_API_KEY` unless you want an API bill. Access tokens last ~6h; persist the refreshed
+session on a volume at `/app/grok-session` (`GROK_HOME`). Default model is
 `grok-4.6` (current Grok Build flagship); set `GROK_MODEL=grok-4.7` when it ships.
 
-See [DEPLOY.md](DEPLOY.md) for the third-service checklist. Claude cron behavior is unchanged
-if you never add the Grok service.
+See [DEPLOY.md](DEPLOY.md) for the third-service checklist. Claude cron stays on
+`railway.toml` if you never add the Grok service.
 
 ## Auth model — Claude Code subscription, NOT API keys
 

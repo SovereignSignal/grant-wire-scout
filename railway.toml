@@ -1,6 +1,7 @@
 # Scout cron service (Claude). Auth = CLAUDE_CODE_OAUTH_TOKEN (no volume). The heartbeat
 # is a SECOND service using railway.heartbeat.toml. The Grok Build lane is a THIRD service
-# using railway.grok.toml (GROK_AUTH_JSON, 06:00 UTC) — same image, does not replace this.
+# using railway.grok.toml (GROK_AUTH_JSON, 06:00 UTC Mon/Wed/Fri) — same image, does not
+# replace this. Claude runs Sun/Tue/Thu/Sat so the two lanes split the week and quota.
 # NOTE: set cronSchedule + restartPolicyType in the Railway UI/API — this file did NOT
 # auto-apply on first deploy here (the service came up always-on by default).
 [build]
@@ -9,5 +10,5 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "bin/run-all.sh"
-cronSchedule = "0 4 * * *"
+cronSchedule = "0 4 * * 0,2,4,6"
 restartPolicyType = "NEVER"
