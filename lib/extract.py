@@ -25,6 +25,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 # Required keys for a top-level payload (happy-path validation).
@@ -42,6 +43,50 @@ META_KEYS = ("producer", "variant", "wire", "generated_at", "run_id")
 # Headless envelopes: Claude uses `result`; Grok Build uses `text` (+ sessionId).
 # Also accept a few aliases so a CLI rename doesn't drop a whole run.
 _ENVELOPE_TEXT_KEYS = ("result", "text", "output", "message", "response", "content")
+
+# Social / shortener hosts are LEADS, never source_url. The prompt already says this;
+# Grok still emitted x.com status URLs in Aug 2026 and several were approved. Enforce
+# it here so a prompt miss cannot land a tweet as the canonical source.
+_LEAD_HOSTS = (
+    "x.com", "twitter.com", "mobile.twitter.com", "t.co",
+    "bsky.app", "linkedin.com", "lnkd.in",
+)
+
+
+def _source_host(url: str) -> str:
+    try:
+        host = (urlparse(str(url or "").strip()).hostname or "").lower()
+    except Exception:
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def reject_lead_urls(payload: dict) -> dict:
+    """Move social/shortener source_urls into rejected[]. Mutates and returns payload."""
+    if not isinstance(payload, dict):
+        return payload
+    kept, rejected = [], list(payload.get("rejected") or [])
+    moved = 0
+    for o in payload.get("opportunities") or []:
+        if not isinstance(o, dict):
+            continue
+        host = _source_host(o.get("source_url", ""))
+        if host in _LEAD_HOSTS or any(host.endswith("." + h) for h in _LEAD_HOSTS):
+            rejected.append({
+                "name": o.get("name"),
+                "source_url": o.get("source_url"),
+                "classification": "NOISE",
+                "reason": "social/shortener URL is a lead, not a canonical source_url",
+            })
+            moved += 1
+        else:
+            kept.append(o)
+    payload["opportunities"] = kept
+    payload["rejected"] = rejected
+    if moved:
+        print(f"[extract] moved {moved} social source_url(s) to rejected (leads, not canonical)",
+              file=sys.stderr)
+    return payload
 
 
 def _is_payload(obj) -> bool:
@@ -211,7 +256,7 @@ def main(raw_path: str, out_json: str) -> int:
         # The raw file ITSELF is malformed/truncated — happens with the bare-payload
         # shape (the model wrote the payload straight to stdout and it was cut off mid
         # output). Don't abort the whole run: salvage opportunities from the raw text.
-        payload = salvage_payload(raw_text)
+        payload = reject_lead_urls(salvage_payload(raw_text))
         Path(out_json).write_text(json.dumps(payload, indent=2))
         return 0
     if raw.get("is_error"):
@@ -238,7 +283,7 @@ def main(raw_path: str, out_json: str) -> int:
             # missing top-level key must never throw away salvaged opportunities.
             payload = salvage_payload(result_text)
 
-    Path(out_json).write_text(json.dumps(payload, indent=2))
+    Path(out_json).write_text(json.dumps(reject_lead_urls(payload), indent=2))
     return 0
 
 

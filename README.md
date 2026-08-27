@@ -44,7 +44,9 @@ The prompt enforces the Wire Room's hardest gate — **currency** (reject expire
 
 ## A/B variants
 
-Both run daily per wire; scored by **promotion rate per producer** over the window (the cheap, honest signal — no neutral scorer needed).
+Production is **variant A only** (one arm per wire). `SCOUT_VARIANTS='A B'` runs both so
+promotion rates are comparable — that **doubles** the Max/SuperGrok quota share, so leave
+it off until you are scoring on purpose (`bin/ab-score.sh`).
 
 | Variant | Thesis | Setting |
 |---|---|---|

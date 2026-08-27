@@ -2,6 +2,8 @@
 # run-all.sh — one scout cron tick. Runs each wire (variant A by default) via run-scout.sh,
 # which self-alerts on failure. Continues past a failing wire so one bad wire can't block the
 # others. Configurable: SCOUT_WIRES (default "crypto ai oss"), SCOUT_VARIANT (default A).
+# Default is a SINGLE arm. Unsetting SCOUT_VARIANT used to fall through to 'A B' and
+# double the Max/SuperGrok quota overnight — do not restore that fallback.
 # Start conservative by setting SCOUT_WIRES="crypto" until you trust it.
 #
 # Engine: SCOUT_ENGINE=claude (default, existing scout service) | grok (Grok Build lane).
@@ -45,12 +47,10 @@ elif [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   exit 0
 fi
 
-# A/B experiment: run BOTH variants per wire so promotion rates are comparable downstream.
-# The Wire Room stores prompt_variant per entry, so A vs B is scorable (see bin/ab-score.sh).
-# SCOUT_VARIANTS overrides; a legacy single SCOUT_VARIANT is still honored. NOTE: two variants
-# DOUBLES the per-wire cost — each run is bounded by the producer wall-clock timeout +
-# SCOUT_MAX_TURNS. Set SCOUT_VARIANTS=A to run a single arm.
-VARIANTS="${SCOUT_VARIANTS:-${SCOUT_VARIANT:-A B}}"
+# A/B experiment: SCOUT_VARIANTS='A B' runs both arms so promotion rates are comparable
+# (see bin/ab-score.sh). Production is variant A only — two arms double the Max/SuperGrok
+# quota share. SCOUT_VARIANTS overrides; a legacy single SCOUT_VARIANT is still honored.
+VARIANTS="${SCOUT_VARIANTS:-${SCOUT_VARIANT:-A}}"
 WIRES="${SCOUT_WIRES:-crypto ai oss}"
 
 rc=0

@@ -110,6 +110,14 @@ def main(opp_path: str, wire: str, api_base: str = None) -> int:
             kept.append(o)
     payload["opportunities"] = kept
     payload.setdefault("rejected", []).extend(dropped)
+    # Post-dedup opportunity_count is what the ledger stores. Funnel counts let a
+    # later heartbeat tell "found nothing" from "found only already-seen URLs".
+    payload["funnel"] = {
+        "found": len(kept) + len(dropped),
+        "kept": len(kept),
+        "dedup_dropped": len(dropped),
+        "seen_set": len(seen),
+    }
     Path(opp_path).write_text(json.dumps(payload, indent=2))
     print(f"[dedup] kept {len(kept)}, dropped {len(dropped)} (seen set size {len(seen)})")
     return 0

@@ -1,11 +1,13 @@
-# Heartbeat cron service — the dead-man's-switch for the Claude scout by default
-# (scan_source=claude-code). Create a SECOND Railway service from this same repo and set
-# its "Config file path" (Settings -> Config-as-code) to railway.heartbeat.toml. Needs
-# DATABASE_URL + the Resend alert vars; no volume needed (it never calls claude or grok).
-# To watch the Grok Build lane instead, set SCOUT_SCAN_SOURCE=grok-scout on a *separate*
-# heartbeat service — do not mix both sources into one email.
-# Claude only runs Sun/Tue/Thu/Sat, so the longest healthy gap is ~48h (Sun→Tue). Keep
-# SCOUT_SILENCE_HOURS around 52 so Mon/Wed/Fri ticks do not page on a scheduled off-day.
+# Heartbeat cron service — the dead-man's-switch for scout wire-feed. Create a SECOND
+# Railway service from this same repo and set its "Config file path" (Settings ->
+# Config-as-code) to railway.heartbeat.toml. Needs DATABASE_URL + the Resend alert
+# vars; no volume needed (it never calls claude or grok).
+# Watches both scout lanes by default (claude-code + grok-scout): a wire is silent
+# only when NEITHER producer landed rows. Pin one lane with SCOUT_SCAN_SOURCE if
+# you want an isolated monitor. 60 hours covers the weekday split so Tue/Thu/Sat
+# 14:00 still see the previous Claude tick (58h) and Friday still sees Wednesday's
+# Grok tick (56h). 52h missed both and paged a saturated Claude oss while Grok had
+# just fed the wire.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"

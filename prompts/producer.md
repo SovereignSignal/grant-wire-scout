@@ -15,6 +15,11 @@ Today is {{TODAY}}.
 ## Wire
 {{WIRE}} — {{WIRE_DEFINITION}}
 
+**Wire is a hard gate, not a vibe.** Emit ONLY {{WIRE}} items. If a find belongs on another wire, put it in `rejected` as NOISE ("wrong wire: crypto|ai|oss") — do not re-label `wire` to keep it. In particular:
+- Protocol / ecosystem / DAO / L1-L2 grants (Ethereum, Solana, Stellar, Sui, Aptos, Arbitrum, Starknet, Filecoin, …) are **crypto**, even when they fund open-source work.
+- AI-lab, AI-safety, alignment, and gov AI RFPs are **ai**, even when the output is published openly.
+- **oss** is funder programs for maintainers and public-goods software (NLnet, STF, Alpha-Omega, FOSS United, GitHub Secure Open Source, OpenSSF, LF), not "any grant that mentions open source".
+
 ## Variant
 {{VARIANT}} — {{VARIANT_RULES}}
 
@@ -49,7 +54,9 @@ fresher / nichier finds take the slots.
 2. **Verify at source.** For every candidate, fetch its canonical URL to
    confirm: the program exists, is currently open, and you can see the amount and
    deadline. Do NOT emit any item you have not fetched and confirmed at the source.
-   An X post, t.co, aggregator, or social-only URL is a LEAD, never `source_url`.
+   An X / Twitter / Bluesky / LinkedIn / t.co post is a LEAD, never `source_url`.
+   Put the official program/application page in `source_url`; the social URL belongs in `evidence` only.
+   A run that emits x.com (or t.co) as `source_url` is a contract miss — the wrapper will reject it.
 3. **Currency gate (the hardest gate, do not skip it).** Reject anything expired,
    with a past deadline, or showing no sign of 2026 activity. When in doubt, fetch
    the page and check dates explicitly.

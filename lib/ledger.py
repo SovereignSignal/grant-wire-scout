@@ -6,6 +6,10 @@ nothing to read once a container cycled. This persists ONE row per run (run_id, 
 variant, status, opportunity_count, cost, duration) to the scout_runs table — queryable
 long after the container is gone, and a foundation for trend/observability queries.
 
+opportunity_count is the POST-DEDUP delivered set. found_count / dedup_dropped live on
+meta.json (and opportunities.json funnel) so a later column can distinguish saturation
+from a thin day without this writer mutating the shared Wire Room schema.
+
 Best-effort by design: a ledger failure must NEVER break the run. Callers invoke it with
 `|| true` and it returns 0 even on DB errors.
 
@@ -54,6 +58,10 @@ def main(run_dir, status, error_class=None):
         "cost_usd": meta.get("cost_usd"),
         "duration_ms": meta.get("duration_ms"),
     }
+    extra = ""
+    if meta.get("found_count") is not None or meta.get("dedup_dropped"):
+        extra = (f" found={meta.get('found_count')} "
+                 f"dedup_dropped={meta.get('dedup_dropped')}")
     try:
         conn = psycopg2.connect(dsn)
         try:
@@ -79,7 +87,7 @@ def main(run_dir, status, error_class=None):
     except Exception as e:
         print(f"ledger: write failed (non-fatal): {e}", file=sys.stderr)
         return 0
-    print(f"ledger: recorded run {row['run_id']} status={status} opps={n}")
+    print(f"ledger: recorded run {row['run_id']} status={status} opps={n}{extra}")
     return 0
 
 

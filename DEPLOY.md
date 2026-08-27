@@ -2,14 +2,15 @@
 
 Three cron services from this one repo + image: the **Claude scout** (finds grants, posts to
 the Wire Room queue), the **Grok Build scout** (parallel lane, same gates, different search
-index), and the **heartbeat** (pages if the Claude scout goes silent). Claude is unchanged.
-Grok is additive.
+index), and the **heartbeat** (pages if a wire is silent across both scout lanes). Claude is
+unchanged. Grok is additive.
 
 ## Data flow
 `run-all.sh` → per wire: `run-producer.sh` (`claude -p` or `grok -p` discovers + source-verifies)
 → `submit.py` POSTs to `wire-room-ops POST /api/scan/submit` (internal key) → entries land
 `scan_source='claude-code'` or `'grok-scout'`, status `raw` → Wire Room dedups + classifies +
-queues (~5 min). Failures email you (Resend); Claude silence is caught by the heartbeat.
+queues (~5 min). Failures email you (Resend); a wire with no scout rows from either
+lane is caught by the heartbeat.
 
 The JSON `producer` field is `claude-code` or `grok-build`. Wire Room's `scan_source` enum
 already has `grok-scout` (Stringer's Grok Scout). This Railway lane reuses that value — do
@@ -30,11 +31,13 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
 2. **Heartbeat service** — second service, same repo; set Config-as-code path to
    `railway.heartbeat.toml` (or set start command `python3 lib/heartbeat.py` + cron `0 14 * * *`
    in the UI). Variables: `DATABASE_URL` (read the shared Wire Room Postgres), `RESEND_API_KEY`,
-   `NOTIFICATION_EMAIL`, `ALERT_FROM`, `SCOUT_SILENCE_HOURS=52`. No volume, no claude/grok token.
-   Watches `scan_source=claude-code` only. To watch Grok, add a *separate* heartbeat with
-   `SCOUT_SCAN_SOURCE=grok-scout` — do not mix both into one email. 52 hours covers Claude's
-   longest scheduled gap (Sunday 04:00 → Tuesday 04:00) so Mon/Wed/Fri heartbeat ticks do
-   not page on a planned off-day.
+   `NOTIFICATION_EMAIL`, `ALERT_FROM`, `SCOUT_SILENCE_HOURS=60`. No volume, no claude/grok token.
+   Watches **both** `claude-code` and `grok-scout` by default — a wire is silent only when
+   neither lane landed rows. Pin one lane with `SCOUT_SCAN_SOURCE=claude-code` (or
+   `grok-scout`) if you want an isolated monitor. 60 hours covers the weekday split:
+   Tue/Thu/Sat 14:00 still see the previous Claude tick (58h), and Friday still sees
+   Wednesday's Grok tick (56h). 52h missed both and paged a saturated Claude oss while
+   Grok had just fed the wire.
 
 3. **Grok Build scout (parallel, optional)** — third service, same repo; Config-as-code path
    `railway.grok.toml` (start command `bin/run-grok-all.sh`, cron `0 6 * * 1,3,5` Mon/Wed/Fri, Restart **Never**).
@@ -71,10 +74,16 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
 `scan_source=grok-scout` in the Wire Room. Default wires are `crypto ai oss`.
 
 ## Operating
-- **Cadence:** Claude Sun/Tue/Thu/Sat 04:00 UTC; Grok Mon/Wed/Fri 06:00 UTC. Heartbeat still
-  runs daily at 14:00 UTC against Claude's queue (`SCOUT_SILENCE_HOURS=52`).
+- **Cadence:** Claude Sun/Tue/Thu/Sat 04:00 UTC; Grok Mon/Wed/Fri 06:00 UTC. Heartbeat
+  runs daily at 14:00 UTC against **both** scout sources (`SCOUT_SILENCE_HOURS=60`).
 - **Alerts are exception-only** (`AUTH` / `QUOTA` / `EMPTY` / `DELIVERY` / `FAILED`), plus the
-  heartbeat on Claude silence. No email = healthy.
+  heartbeat when a wire is silent across both lanes. No email = healthy.
+- **Quota, not dollars.** Both lanes ride subscriptions (Claude Max, SuperGrok). The CLI
+  `cost_usd` is accounting-equivalent only. The real budget is the shared usage cap and
+  operator review time. Keep `SCOUT_VARIANT=A` (unset used to fall through to A+B).
+- **SILENT on a Claude-off day** that names a wire Grok already fed is a stale window —
+  after this deploy it should not fire. A clean zero-yield still means "nothing new",
+  which includes "every find was already in the catalog".
 - **Claude token expired?** Re-run `claude setup-token`, update `CLAUDE_CODE_OAUTH_TOKEN`.
 - **Grok session expired?** Access tokens last ~6h; the CLI refresh lives on the
   `/app/grok-session` volume. Re-run `grok login` and replace `GROK_AUTH_JSON` only after an
