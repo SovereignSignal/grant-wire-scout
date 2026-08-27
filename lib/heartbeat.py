@@ -16,23 +16,29 @@ built for exactly this post-mortem) and reports what actually happened:
 
     no-run            no ledger row in the window        -> the cron did not run
     auth / quota      a run failed that way              -> that run's own error class
-    zero-yield        status=ok, 0 opportunities         -> ran clean, found nothing (thin day)
+    zero-yield        status=ok, 0 opportunities         -> ran clean, nothing new landed
     lost-in-delivery  status=ok, opps>0, 0 rows landed   -> broke between submit and the queue
 
-The window is judged from EVERY run in it, not the newest one. A wire runs once per prompt
-variant per tick (run-all.sh defaults to SCOUT_VARIANTS='A B'), so it can write two ledger
-rows; picking the latest judged the wire by whichever arm finished last — B, the deliberately
-low-yield tight-filter — and hid the other arm's auth failure or lost-in-delivery behind B's
-clean empty run, reporting it as "a thin day, no action needed". collapse_runs() folds them:
-worst status wins, yields sum. Production runs variant A only today, so this was latent — it
-would have gone live the moment the A/B that bin/ab-score.sh exists to score was switched on.
+A 60h window is required on the weekday cadence (Claude Sun/Tue/Thu/Sat 04:00, Grok
+Mon/Wed/Fri 06:00, heartbeat daily 14:00). 52h looks back to 10:00 two days earlier and
+misses the previous Claude tick (04:00 is 58h before Tue/Thu/Sat 14:00) and Friday's
+lookback also misses Wednesday's Grok tick (56h). 60h covers both.
 
-A zero-yield alert also carries the wire's habit (summarize_trend): the silence window spans
-one Claude tick (and, on the weekday cadence, the ~48h Sun→Tue gap) and has no memory, so it
-cannot tell a thin day from a wire drying up. The median daily
-yield and the count of prior zero days answer "is this normal for this wire?" — 2026-08-10,
-ai returned 0 for the first time in 20 run-days against a median of 3, while crypto zeroes
-roughly weekly. Identical alerts, opposite meanings.
+By default this watches BOTH scout lanes (claude-code + grok-scout). After Grok existed,
+"SILENT: oss" no longer meant the oss wire was empty — 2026-08-27 Claude oss was a
+saturation zero while Wednesday Grok had just delivered 5 oss rows. A wire is silent only
+when NEITHER source landed rows. Pin a single lane with SCOUT_SCAN_SOURCE=claude-code
+(or grok-scout) if you want the old isolated monitor.
+
+The window is judged from EVERY run in it, not the newest one. A wire can write two ledger
+rows if SCOUT_VARIANTS='A B'; picking the latest judged the wire by whichever arm finished
+last — B, the deliberately low-yield tight-filter — and hid the other arm's auth failure
+or lost-in-delivery behind B's clean empty run. collapse_runs() folds them: worst status
+wins, yields sum. Production runs variant A only; this stays latent unless A/B is on.
+
+A zero-yield alert also carries the wire's habit (summarize_trend). opportunity_count is
+post-dedup, so a clean 0 is either a thin market OR every find was already in the catalog
+— same ledger row, opposite meanings. The copy says both; the trend says whether to look.
 
 EXIT CODES — a firing dead-man's-switch is NOT a crashed deploy. The service runs with
 restartPolicyType=NEVER, so any non-zero exit makes Railway send "Deploy Crashed!"; returning 1
@@ -41,12 +47,13 @@ on a successful detection meant every true alert arrived twice, once mislabelled
     1  the alert could NOT be delivered — Railway's crash mail is then the intended backstop
     2  the heartbeat could not do its job at all (no DSN, no driver, DB unreachable)
 
-Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (default 52),
+Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (default 60),
      SCOUT_WIRES (default "crypto ai oss", whitespace-separated expected wires),
      plus RESEND_API_KEY + NOTIFICATION_EMAIL + ALERT_FROM (used by lib/notify.py).
-     SCOUT_SCAN_SOURCE (default claude-code) selects which queue this monitor watches;
-     a second heartbeat with SCOUT_SCAN_SOURCE=grok-scout watches the Grok Build lane.
-     Ledger rows are scoped by run_id prefix so Claude and Grok ticks don't diagnose each other.
+     SCOUT_SCAN_SOURCES (default "claude-code grok-scout") is the wire-feed set.
+     SCOUT_SCAN_SOURCE, if set, pins a single lane (overrides the default pair).
+     Ledger rows are scoped by run_id prefix so a dedicated single-lane heartbeat
+     does not diagnose the other producer's ticks.
 """
 import os
 import statistics
@@ -54,20 +61,39 @@ import subprocess
 import sys
 from collections import namedtuple
 
-SOURCE = os.environ.get("SCOUT_SCAN_SOURCE", "claude-code")  # must match lib/submit.py
-
 # Map scan_source → scout_runs.run_id prefix (run-producer.sh: ${PRODUCER}-${ts}).
-# Without this, a Grok AUTH would make the Claude heartbeat scream, and vice versa.
+# Without this, a Grok AUTH would make a Claude-only heartbeat scream, and vice versa.
 _RUN_ID_PREFIX = {
     "claude-code": "claude-code-",
     "grok-scout": "grok-build-",
 }
 
 
+def watch_sources():
+    """Which scan_source values count as 'the scout fed this wire'.
+
+    SCOUT_SCAN_SOURCES wins when set (whitespace-separated). Else SCOUT_SCAN_SOURCE
+    pins one lane. Else both lanes — the Wire Room is fed if either producer landed.
+    """
+    multi = (os.environ.get("SCOUT_SCAN_SOURCES") or "").split()
+    if multi:
+        return multi
+    single = (os.environ.get("SCOUT_SCAN_SOURCE") or "").strip()
+    if single:
+        return [single]
+    return ["claude-code", "grok-scout"]
+
+
+# Kept for callers / tests that imported SOURCE. Prefer watch_sources() — it is
+# live, so SCOUT_SCAN_SOURCE set after import (test-grok-engine.sh) still works
+# if diagnose_wire reads watch_sources() rather than this snapshot.
+SOURCE = os.environ.get("SCOUT_SCAN_SOURCE") or "claude-code"
+
+
 def run_id_prefix(source=None):
-    source = source if source is not None else SOURCE
+    source = source if source is not None else (watch_sources()[0] if watch_sources() else "claude-code")
     explicit = (os.environ.get("SCOUT_RUN_ID_PREFIX") or "").strip()
-    if explicit:
+    if explicit and len(watch_sources()) == 1:
         return explicit if explicit.endswith("-") else explicit + "-"
     return _RUN_ID_PREFIX.get(source, source.rstrip("-") + "-")
 
@@ -90,13 +116,11 @@ def _severity(status):
 def collapse_runs(rows):
     """Fold every run one wire had in the window into a single (status, opportunity_count).
 
-    A window can hold MORE THAN ONE run per wire: run-all.sh defaults to SCOUT_VARIANTS='A B',
-    so each wire runs both prompt arms per tick and each run writes its own ledger row. Reading
-    only the newest row judged the wire by whichever arm finished last — variant B, the
-    deliberately low-yield tight-filter — and went blind to the other, so an auth failure or a
+    A window can hold MORE THAN ONE run per wire: two prompt variants, or Claude + Grok
+    both ticking inside 60h. Reading only the newest row judged the wire by whichever
+    arm finished last and went blind to the other, so an auth failure or a
     lost-in-delivery on variant A could hide behind B's clean empty run and be reported as
-    "a thin day, no action needed". That is the wrong-cause hole 2026-08-05 closed, reopened
-    through the variant dimension. Worst status wins; yields sum. Returns None for no rows,
+    "a thin day, no action needed". Worst status wins; yields sum. Returns None for no rows,
     which keeps "no run happened" distinct from "a run happened and found nothing".
     """
     rows = list(rows)
@@ -158,11 +182,44 @@ def _trend_text(trend):
             f"of them zero — this is a first for this wire, so it is worth a look.")
 
 
+def _auth_remedy():
+    """Token-rotation advice for the lane(s) this heartbeat is watching."""
+    sources = watch_sources()
+    bits = []
+    if "claude-code" in sources:
+        bits.append(
+            "If the Claude lane failed AUTH: re-run `claude setup-token` and update "
+            "CLAUDE_CODE_OAUTH_TOKEN on the scout service."
+        )
+    if "grok-scout" in sources:
+        bits.append(
+            "If the Grok lane failed AUTH: refresh GROK_AUTH_JSON from `grok login` "
+            "(contents of ~/.grok/auth.json) on the grok-scout service, or set XAI_API_KEY."
+        )
+    if not bits:
+        bits.append("a run failed AUTH — rotate the credentials for this scout lane.")
+    if len(bits) == 1 and "claude-code" in sources and "grok-scout" not in sources:
+        return (
+            "a run failed AUTH — the claude token was rejected. Re-run "
+            "`claude setup-token` and update CLAUDE_CODE_OAUTH_TOKEN on the scout service."
+        )
+    if len(bits) == 1 and "grok-scout" in sources and "claude-code" not in sources:
+        return (
+            "a run failed AUTH — Grok Build credentials were rejected. Refresh "
+            "GROK_AUTH_JSON from `grok login` (contents of ~/.grok/auth.json) on the "
+            "grok-scout service, or set XAI_API_KEY."
+        )
+    return "a run failed AUTH. " + " ".join(bits)
+
+
 def diagnose_wire(wire, count, run, trend=None):
     """Explain one wire's delivery, given its queue row count and its collapsed scout_runs rows.
 
     `run` is None (no run recorded in the window) or a (status, opportunity_count) tuple, as
     returned by collapse_runs(). `trend` is an optional Trend giving the wire's prior habit.
+
+    `count` is across every scan_source this heartbeat watches. After Grok existed, a Claude
+    saturation zero must not page if the other lane already fed the wire.
     """
     if count > 0:
         return Diagnosis(wire, False, "delivering", f"{count} entries reached the queue")
@@ -177,21 +234,10 @@ def diagnose_wire(wire, count, run, trend=None):
     opps = run[1] or 0
 
     if status == "auth":
-        if SOURCE == "claude-code":
-            remedy = (
-                "a run failed AUTH — the claude token was rejected. Re-run "
-                "`claude setup-token` and update CLAUDE_CODE_OAUTH_TOKEN on the scout service."
-            )
-        else:
-            remedy = (
-                "a run failed AUTH — Grok Build credentials were rejected. Refresh "
-                "GROK_AUTH_JSON from `grok login` (contents of ~/.grok/auth.json) on the "
-                "grok-scout service, or set XAI_API_KEY."
-            )
-        return Diagnosis(wire, True, "auth", remedy)
+        return Diagnosis(wire, True, "auth", _auth_remedy())
     if status == "quota":
         return Diagnosis(wire, True, "quota",
-                         "a run hit the Max usage cap (QUOTA) and produced nothing.")
+                         "a run hit the Max / SuperGrok usage cap (QUOTA) and produced nothing.")
     if status != "ok":
         return Diagnosis(wire, True, status or "unknown",
                          f"a run failed with status '{status or 'unknown'}' — see the scout "
@@ -203,7 +249,8 @@ def diagnose_wire(wire, count, run, trend=None):
                          "The break is between submit and the queue — a delivery error, or every item "
                          "was deduped as already-seen.")
     return Diagnosis(wire, True, "zero-yield",
-                     "the scout ran cleanly and found nothing new — a thin day, not a fault. "
+                     "the scout ran cleanly and found nothing new — either a thin day, or every "
+                     "find was already in the catalog (dedup emptied the batch). Not a crash. "
                      "No action needed unless it repeats." + _trend_text(trend))
 
 
@@ -216,28 +263,28 @@ def _fetch(dsn, hours, wires):
     """
     import psycopg2
 
+    sources = watch_sources()
+    likes = [run_id_prefix(s) + "%" for s in sources]
     conn = psycopg2.connect(dsn)
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "/* hb:counts */ SELECT wire, count(*) FROM scan_entries "
-                "WHERE scan_source = %s AND created_at > now() - (%s || ' hours')::interval "
+                "WHERE scan_source = ANY(%s) AND created_at > now() - (%s || ' hours')::interval "
                 "GROUP BY wire",
-                (SOURCE, str(hours)),
+                (sources, str(hours)),
             )
             counts = {w: n for w, n in cur.fetchall() if w in wires}
         with conn.cursor() as cur:
             # EVERY run in the window we're judging, not just the newest — a wire runs once per
-            # prompt variant per tick. "No rows" still means "no run happened in the window".
-            # run_id prefix keeps Claude's heartbeat from reading Grok Build ledger rows
-            # (same table, two producers).
-            like = run_id_prefix() + "%"
+            # prompt variant per tick, and both lanes can tick inside 60h. "No rows" still
+            # means "no run happened in the window" for the watched prefixes.
             cur.execute(
                 "/* hb:runs */ SELECT wire, status, opportunity_count FROM scout_runs "
                 "WHERE created_at > now() - (%s || ' hours')::interval "
-                "AND run_id LIKE %s "
+                "AND run_id LIKE ANY(%s) "
                 "ORDER BY wire, created_at",
-                (str(hours), like),
+                (str(hours), likes),
             )
             grouped = {}
             for w, s, n in cur.fetchall():
@@ -253,9 +300,9 @@ def _fetch(dsn, hours, wires):
                 "sum(opportunity_count) FROM scout_runs "
                 "WHERE status = 'ok' AND created_at > now() - interval '30 days' "
                 "AND created_at <= now() - (%s || ' hours')::interval "
-                "AND run_id LIKE %s "
+                "AND run_id LIKE ANY(%s) "
                 "GROUP BY wire, day",
-                (str(hours), like),
+                (str(hours), likes),
             )
             trends = summarize_trend([(w, d, n) for w, d, n in cur.fetchall() if w in wires])
     finally:
@@ -265,8 +312,9 @@ def _fetch(dsn, hours, wires):
 
 def main():
     dsn = os.environ.get("DATABASE_URL", "")
-    hours = float(os.environ.get("SCOUT_SILENCE_HOURS", "52"))
+    hours = float(os.environ.get("SCOUT_SILENCE_HOURS", "60"))
     wires = os.environ.get("SCOUT_WIRES", "crypto ai oss").split()
+    sources = watch_sources()
     if not dsn:
         print("heartbeat: DATABASE_URL is required", file=sys.stderr)
         return 2
@@ -287,9 +335,10 @@ def main():
     results = [diagnose_wire(w, counts.get(w, 0), runs.get(w), trends.get(w)) for w in wires]
     summary = " ".join(f"{d.wire}={counts.get(d.wire, 0)}" for d in results)
     silent = [d for d in results if d.silent]
+    source_str = ", ".join(sources)
 
     if not silent:
-        print(f"heartbeat: ok — {summary} (last {hours:g}h)")
+        print(f"heartbeat: ok — {summary} (last {hours:g}h, sources={source_str})")
         return 0
 
     silent_str = " ".join(d.wire for d in silent)
@@ -297,8 +346,8 @@ def main():
     detail = "\n\n".join(f"{d.wire}: [{d.cause}] {d.text}" for d in silent)
     body = (
         f"{summary} — SILENT: {silent_str} (last {hours:g}h)\n\n"
-        f"No scan_source='{SOURCE}' rows reached the Wire Room queue for the above wire(s). "
-        f"Cause per wire, read from the scout_runs ledger:\n\n{detail}\n"
+        f"No scout rows (scan_source in {source_str}) reached the Wire Room queue "
+        f"for the above wire(s). Cause per wire, read from the scout_runs ledger:\n\n{detail}\n"
     )
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

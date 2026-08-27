@@ -6,8 +6,9 @@
 # what fraction did the operator APPROVE (vs decline/archive)? Duplicates are excluded
 # from the rate — a repeat the Wire Room already had isn't a quality failure of the producer.
 #
-# No extra plumbing is needed: the scout now runs both variants (bin/run-all.sh) and the Wire
-# Room stores prompt_variant per scan_entries row, so this is a plain read.
+# No extra plumbing is needed once both arms have rows: the Wire Room stores prompt_variant
+# per scan_entries row, so this is a plain read. Production is variant A only; set
+# SCOUT_VARIANTS='A B' on Claude when you want a scored comparison (doubles quota).
 #
 # Usage:  DATABASE_URL=<wire-room postgres> ./bin/ab-score.sh [days] [scan_source]
 #         scan_source default claude-code; pass grok-scout to score the Grok Build lane.
@@ -40,5 +41,5 @@ SQL
 echo ""
 echo "scan_source=${SOURCE}"
 echo "approve_pct = approved / (approved + declined + archived); duplicates excluded."
-echo "Compare variant A vs B once both have accumulated finds (the scout now runs both)."
+echo "Compare variant A vs B once both have accumulated finds (set SCOUT_VARIANTS='A B')."
 echo "Score the Grok Build lane with: ./bin/ab-score.sh ${DAYS} grok-scout"

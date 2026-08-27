@@ -12,7 +12,7 @@
 #   CAUSE  — diagnose() reads the scout_runs ledger and names the REAL cause per wire:
 #     no-run             no ledger row in the window          -> cron down / container never started
 #     auth|quota|failed  the run itself failed                -> the run's own error class
-#     zero-yield         status=ok, opportunity_count=0       -> ran clean, found nothing (thin day)
+#     zero-yield         status=ok, opportunity_count=0       -> ran clean, nothing new (thin or dedup)
 #     lost-in-delivery   status=ok, opps>0, but 0 rows landed -> broke between submit and the queue
 #
 #   EXIT   — a firing dead-man's-switch is NOT a crashed deploy:
@@ -92,6 +92,7 @@ run_hb(){ # $1=fixture json, $2..=extra env assignments
   rm -f "$CAP/alerts.log"
   env PYTHONPATH="$TMP/stub" STUB_DB_FIXTURE="$fx" \
       DATABASE_URL="postgresql://stub/stub" SCOUT_WIRES="crypto ai oss" SCOUT_SILENCE_HOURS=26 \
+      SCOUT_SCAN_SOURCE= SCOUT_SCAN_SOURCES= \
       RESEND_API_KEY= NOTIFICATION_EMAIL= ALERT_FROM= \
       NOTIFY_WEBHOOK_URL="http://127.0.0.1:$PORT/webhook" \
       "$@" python3 "$ROOT/lib/heartbeat.py" >"$CAP/out.txt" 2>&1
@@ -109,7 +110,7 @@ cases = [
     ("no ledger row at all -> the cron never ran",        0, None,                    "no-run"),
     ("run failed AUTH -> token rejected",                 0, ("auth", 0),             "auth"),
     ("run failed QUOTA -> usage cap",                     0, ("quota", 0),            "quota"),
-    ("clean run, 0 opportunities -> thin day",            0, ("ok", 0),               "zero-yield"),
+    ("clean run, 0 opportunities -> zero-yield",          0, ("ok", 0),               "zero-yield"),
     ("clean run delivered 3 but 0 landed -> lost",        0, ("ok", 3),               "lost-in-delivery"),
 ]
 fails = 0
@@ -130,10 +131,9 @@ PY
 [ $? -eq 0 ] && ok "diagnose() cause matrix" || bad "diagnose() cause matrix"
 
 echo "== A2. collapse_runs(): every run in the window counts, not just the last one =="
-# The window can hold MORE THAN ONE run per wire: run-all.sh defaults to SCOUT_VARIANTS='A B',
-# so each wire runs twice a tick and writes two ledger rows. Reading only the newest row judged
-# the wire by whichever variant finished last (B, the deliberately low-yield tight-filter arm)
-# and went blind to the other — re-opening the wrong-cause hole 2026-08-05 closed.
+# The window can hold MORE THAN ONE run per wire (SCOUT_VARIANTS='A B', or Claude + Grok
+# both inside 60h). Reading only the newest row judged the wire by whichever variant
+# finished last and went blind to the other — re-opening the wrong-cause hole 2026-08-05 closed.
 python3 - "$ROOT" <<'PY'
 import sys, os
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
@@ -235,8 +235,8 @@ rc="$(run_hb "$FX_ZERO")"
                 || bad "silent wire + alert delivered -> rc=$rc (want 0)"
 body="$(alert_body)"
 grep -qi "oss" <<<"$body" && ok "alert names the silent wire" || bad "alert omits the wire"
-grep -qi "found nothing\|zero-yield\|no new" <<<"$body" \
-  && ok "alert states the TRUE cause (clean run, no finds)" || bad "alert omits the true cause"
+grep -qi "found nothing\|zero-yield\|no new\|already in the catalog\|dedup" <<<"$body" \
+  && ok "alert states the TRUE cause (clean run, no new finds)" || bad "alert omits the true cause"
 grep -qi "setup-token\|token may have expired" <<<"$body" \
   && bad "alert still blames the OAuth token on a clean zero-yield run" \
   || ok "alert does NOT blame the token when the run was clean"
@@ -271,6 +271,14 @@ rc="$(env STUB_DB_FAIL=1 bash -c "$(declare -f run_hb); TMP='$TMP'; CAP='$CAP'; 
 
 rc="$(env PYTHONPATH="$TMP/stub" DATABASE_URL= python3 "$ROOT/lib/heartbeat.py" >/dev/null 2>&1; echo $?)"
 [ "$rc" = "2" ] && ok "missing DATABASE_URL -> rc=2" || bad "missing DATABASE_URL -> rc=$rc (want 2)"
+
+echo "== B8. other lane already fed the wire (2026-08-27 Thursday oss) =="
+# Claude oss was a clean post-dedup 0; Grok had delivered 5 oss rows the day before.
+# Combined counts are what diagnose() sees. Must NOT page SILENT.
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4],["oss",5]],"runs":[["oss","ok",0]]}')"
+[ "$rc" = "0" ] && ok "fed-by-other-lane -> rc=0" || bad "fed-by-other-lane -> rc=$rc (want 0)"
+[ -z "$(alert_body)" ] && ok "fed-by-other-lane sends no alert" \
+                       || bad "fed-by-other-lane sent an alert: $(alert_body)"
 
 echo "== C. multi-variant windows (SCOUT_VARIANTS='A B') =="
 

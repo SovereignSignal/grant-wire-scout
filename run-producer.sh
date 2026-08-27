@@ -51,9 +51,9 @@ fi
 
 # --- wire definitions + preferred source domains ---
 declare -A WIRE_DEF WIRE_SOURCES WIRE_TARGET
-WIRE_DEF[crypto]="crypto / web3 funding: protocol ecosystem grants (Ethereum, Solana, Cardano, Filecoin, Cosmos, etc.), DAO treasury grants, fellowship & bounty programs, crypto-native RFPs."
-WIRE_DEF[ai]="AI / ML funding: AI-safety & alignment grants, compute grants, research fellowships, open-source model funding, gov AI RFPs (NSF/NIH/ARPA-E/DARPA), foundation AI programs."
-WIRE_DEF[oss]="open-source funding: funder programs (Sovereign Tech Fund, NLnet, Alpha-Omega, FOSS responders), foundation grants, corporate OSS funds, maintainer fellowships."
+WIRE_DEF[crypto]="crypto / web3 funding: protocol ecosystem grants (Ethereum, Solana, Stellar, Sui, Aptos, Arbitrum, Starknet, Cardano, Filecoin, Cosmos, etc.), DAO treasury grants, fellowship & bounty programs, crypto-native RFPs. If a protocol/ecosystem fund pays people to write open-source, it is STILL crypto — not oss."
+WIRE_DEF[ai]="AI / ML funding: AI-safety & alignment grants, compute grants, research fellowships, open-source model funding, gov AI RFPs (NSF/NIH/ARPA-E/DARPA), lab programs (Anthropic, OpenAI, Thinking Machines, etc.). An AI-lab research grant is ai — not oss — even when the work is published openly."
+WIRE_DEF[oss]="open-source *funder* programs for maintainers and public-goods software: NLnet, Sovereign Tech Fund, Alpha-Omega, FOSS United / FOSS responders, GitHub Secure Open Source Fund, OpenSSF, Linux Foundation, SustainOSS, Software Sustainability Institute. NOT protocol ecosystem grants (those are crypto) and NOT AI-lab/safety grants (those are ai)."
 
 WIRE_SOURCES[crypto]="forum.zcashcommunity.com, solana.foundation/grants, cardano.ideascale.com, ethereum.org, filecoin.io/grants, cosmos.network, gov.foundation, dao treasury pages, gitcoin.co"
 WIRE_SOURCES[ai]="safety.anthropic.com, openai.com/security, nsf.gov, grants.gov, ariacc.org, longresist.org, gov.uk AI grant pages, ai-safety-focused foundations, FAR.AI, Apollo Research"
@@ -223,13 +223,14 @@ python3 - "$RUN_DIR" "$WIRE" "$VARIANT" "$RUN_ID" "$MODEL" "$ENGINE" "$PRODUCER"
 import sys, json, os, datetime
 run_dir, wire, variant, run_id, model, engine, producer = sys.argv[1:8]
 opps_path = os.path.join(run_dir, "opportunities.json")
-n = 0; score_avg = None
+n = 0; score_avg = None; funnel = {}
 if os.path.exists(opps_path):
     try:
         d = json.load(open(opps_path))
         opps = d.get("opportunities", [])
         n = len(opps)
         if opps: score_avg = round(sum(o.get("fit_score",0) for o in opps)/len(opps))
+        funnel = d.get("funnel") or {}
     except Exception: pass
 try: raw = json.load(open(os.path.join(run_dir, "raw.json"))) if os.path.exists(os.path.join(run_dir,"raw.json")) else {}
 except Exception: raw = {}
@@ -238,6 +239,8 @@ print(json.dumps({
   "engine": engine, "producer": producer,
   "generated_at": datetime.datetime.utcnow().isoformat()+"Z",
   "opportunity_count": n, "avg_fit_score": score_avg,
+  "found_count": funnel.get("found", n),
+  "dedup_dropped": funnel.get("dedup_dropped", 0),
   "cost_usd": raw.get("total_cost_usd"),
   "duration_ms": raw.get("duration_ms") or raw.get("durationMs"),
 }, indent=2))

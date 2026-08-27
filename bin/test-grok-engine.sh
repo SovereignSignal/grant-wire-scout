@@ -77,6 +77,23 @@ out = json.load(open(out_path))
 check("main() grok envelope rc=0", rc == 0)
 check("main() extracted grok-build producer", out.get("producer") == "grok-build")
 check("main() kept x_search discovered_via", out["opportunities"][0]["discovered_via"] == "x_search")
+
+# Social source_url is a lead — hard-reject even if the model emitted it.
+social = dict(payload)
+social["opportunities"] = [{
+    **payload["opportunities"][0],
+    "name": "Base Batches via tweet",
+    "source_url": "https://x.com/base/status/2090115624764629058",
+}]
+social_raw = {"text": json.dumps(social), "sessionId": "s"}
+social_in = os.path.join(sys.argv[2], "raw-social.json")
+social_out = os.path.join(sys.argv[2], "opps-social.json")
+json.dump(social_raw, open(social_in, "w"))
+extract.main(social_in, social_out)
+sout = json.load(open(social_out))
+check("x.com source_url is stripped from opportunities", sout.get("opportunities") == [])
+check("x.com source_url landed in rejected",
+      any(r.get("source_url", "").startswith("https://x.com/") for r in sout.get("rejected") or []))
 sys.exit(1 if fails else 0)
 PY
 [ $? -eq 0 ] && ok "extract.py grok envelope matrix" || bad "extract.py grok envelope matrix"
