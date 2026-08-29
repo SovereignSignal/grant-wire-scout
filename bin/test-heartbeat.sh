@@ -43,9 +43,14 @@ class _Cur:
     def execute(self, sql, params=None):
         # heartbeat.py tags each query with an /* hb:<name> */ marker; two of them read
         # scout_runs, so the table name alone can no longer tell them apart.
-        key = next((k for k in ("counts", "runs", "trend") if f"/* hb:{k} */" in sql), None)
+        key = next((k for k in ("counts", "runs", "trend", "lanes", "funnel")
+                    if f"/* hb:{k} */" in sql), None)
         assert key, f"unrecognized query (missing /* hb:* */ marker):\n{sql}"
-        self.rows = [tuple(r) for r in self.fx.get(key, [])]
+        if key == "lanes" and "lanes" not in self.fx:
+            # Fixtures that predate lane diagnosis: do not invent a dead lane.
+            self.rows = [("__skip_lanes__", None, None)]
+        else:
+            self.rows = [tuple(r) for r in self.fx.get(key, [])]
     def fetchall(self): return self.rows
     def __enter__(self): return self
     def __exit__(self, *a): return False
@@ -279,6 +284,65 @@ rc="$(run_hb '{"counts":[["crypto",3],["ai",4],["oss",5]],"runs":[["oss","ok",0]
 [ "$rc" = "0" ] && ok "fed-by-other-lane -> rc=0" || bad "fed-by-other-lane -> rc=$rc (want 0)"
 [ -z "$(alert_body)" ] && ok "fed-by-other-lane sends no alert" \
                        || bad "fed-by-other-lane sent an alert: $(alert_body)"
+
+echo "== B9. lane-dead / lane-auth even when the other lane fed the wire =="
+# Claude AUTH on oss, Grok already landed 5 oss rows. Must NOT SILENT the wire,
+# MUST page the Claude lane. This is the hole dual-source wire-feed opened.
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4],["oss",5]],"runs":[["oss","auth",0]],"lanes":[["claude-code","auth",0],["grok-scout","ok",5]]}')"
+[ "$rc" = "0" ] && ok "lane-auth + other-lane-fed -> rc=0" || bad "lane-auth rc=$rc (want 0)"
+body="$(alert_body)"
+grep -qi "LANE" <<<"$body" && ok "lane-auth alert names LANE" || bad "lane-auth alert missing LANE: $body"
+grep -qi "AUTH\|setup-token" <<<"$body" && ok "lane-auth alert carries AUTH remedy" \
+                                        || bad "lane-auth alert lost AUTH: $body"
+grep -qi "SILENT" <<<"$body" && bad "lane-auth must not SILENT a fed wire" \
+                             || ok "lane-auth does not SILENT a fed wire"
+
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4],["oss",5]],"runs":[["oss","ok",0]],"lanes":[["grok-scout","ok",5]]}')"
+body="$(alert_body)"
+grep -qi "LANE" <<<"$body" && ok "missing Claude ledger row pages LANE" \
+                           || bad "lane-dead (no Claude row) did not page: $body"
+grep -qi "did not run\|no scout_runs\|cron" <<<"$body" \
+  && ok "lane-dead says that cron did not run" || bad "lane-dead copy wrong: $body"
+
+echo "== B10. saturation vs thin (found_count on the ledger) =="
+python3 - "$ROOT" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import heartbeat as hb
+fails = 0
+d = hb.diagnose_wire("oss", 0, ("ok", 0, 6))
+if d.cause != "saturation" or "already in the catalog" not in d.text:
+    print(f"  FAIL: found=6/kept=0 -> {d.cause!r} {d.text!r}", file=sys.stderr); fails += 1
+else:
+    print("  ok: found=6/kept=0 is saturation, not a thin day")
+d = hb.diagnose_wire("oss", 0, ("ok", 0))
+if d.cause != "zero-yield":
+    print(f"  FAIL: no found_count should stay zero-yield, got {d.cause!r}", file=sys.stderr); fails += 1
+else:
+    print("  ok: missing found_count stays zero-yield (backward compatible)")
+d = hb.diagnose_lane("claude-code", None)
+if d.cause != "lane-dead" or not d.silent:
+    print(f"  FAIL: diagnose_lane None -> {d}", file=sys.stderr); fails += 1
+else:
+    print("  ok: diagnose_lane None is lane-dead")
+d = hb.diagnose_lane("claude-code", ("ok", 0))
+if d.silent:
+    print(f"  FAIL: ok lane must not be silent: {d}", file=sys.stderr); fails += 1
+else:
+    print("  ok: diagnose_lane ok is alive")
+d = hb.diagnose_lane("claude-code", ("skipped", 0))
+if d.silent:
+    print(f"  FAIL: skipped lane must be alive: {d}", file=sys.stderr); fails += 1
+else:
+    print("  ok: diagnose_lane skipped is alive")
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && ok "saturation + diagnose_lane unit matrix" || bad "saturation + diagnose_lane unit matrix"
+
+rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0,6]],"funnel":[[1]]}')"
+grep -qi "saturation\|already in the catalog" <<<"$(alert_body)" \
+  && ok "end-to-end saturation copy when found_count=6" \
+  || bad "saturation e2e copy: $(alert_body)"
 
 echo "== C. multi-variant windows (SCOUT_VARIANTS='A B') =="
 

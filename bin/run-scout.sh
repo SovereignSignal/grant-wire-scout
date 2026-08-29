@@ -32,6 +32,37 @@ alert() { python3 "$ROOT/lib/notify.py" "$1" || echo "[run-scout] ALERT SEND FAI
 # record the run outcome in the durable scout_runs ledger (M8; best-effort, needs DATABASE_URL)
 ledger() { python3 "$ROOT/lib/ledger.py" "$run_dir" "$1" "${2:-}" || true; }
 
+# 0. opt-in skip when the other lane just fed this wire (saves Max/SuperGrok on
+#    saturated ticks). Unset/0 = always run. Exit 10 = skip; anything else runs.
+python3 "$ROOT/lib/skip_if_fed.py" "$WIRE"; skip_rc=$?
+if [ "$skip_rc" -eq 10 ]; then
+  TODAY_TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
+  PRODUCER="$([ "$ENGINE" = grok ] && echo grok-build || echo claude-code)"
+  run_dir="$ROOT/runs/$WIRE/$VARIANT/${PRODUCER}-${TODAY_TS}-skipped"
+  mkdir -p "$run_dir"
+  python3 - "$run_dir" "$WIRE" "$VARIANT" "$MODEL" "$ENGINE" "$PRODUCER" <<'PY'
+import json, os, sys, datetime
+run_dir, wire, variant, model, engine, producer = sys.argv[1:7]
+meta = {
+  "run_id": os.path.basename(run_dir),
+  "wire": wire, "variant": variant, "model": model,
+  "engine": engine, "producer": producer,
+  "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+  "opportunity_count": 0, "found_count": 0, "dedup_dropped": 0,
+  "avg_fit_score": None, "cost_usd": 0, "duration_ms": 0,
+}
+open(f"{run_dir}/meta.json", "w").write(json.dumps(meta, indent=2))
+print(json.dumps(meta, indent=2))
+PY
+  echo "RUN_DIR=$run_dir"
+  ledger skipped skipped-fed
+  echo "[run-scout] skipped ($LANE $WIRE/$VARIANT) — other lane already fed this wire"
+  exit 0
+fi
+if [ "$skip_rc" -eq 2 ]; then
+  echo "[run-scout] skip_if_fed misconfigured — running anyway" >&2
+fi
+
 # 1. discover -> verify -> report
 out="$("$ROOT/run-producer.sh" --wire "$WIRE" --variant "$VARIANT" --engine "$ENGINE" --model "$MODEL" 2>&1)"; rc=$?
 printf '%s\n' "$out"

@@ -92,3 +92,17 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
   it's shared with interactive Claude Code sessions. Grok Build usage is the SuperGrok quota
   (or an API bill if you set `XAI_API_KEY`).
 - **Score the A/B (or Claude vs Grok):** `./bin/ab-score.sh 30` and `./bin/ab-score.sh 30 grok-scout`.
+  Standing board (week × source × wire × variant): `./bin/scoreboard.sh 30`.
+  Railway Grok is `grok-scout` / variant **A**. Stringer Grok is variant **S**.
+- **Skip a saturated wire:** set `SCOUT_SKIP_IF_FED_HOURS=36` on Claude and/or Grok.
+  Writes a `status=skipped` ledger row so the lane does not look dead.
+- **Verified-only submit:** `SCOUT_REQUIRE_VERIFIED=1` drops `unverified` / `fetch_failed`
+  (keeps `partial`). Default off — recall over precision.
+- **Saturation vs thin day:** apply `sql/scout_runs_funnel.sql` once on Wire Room
+  Postgres. After that, heartbeat can say "found 6, all already in the catalog".
+- **Split Grok sources:** keep submitting as `grok-scout` until wire-room-ops adds
+  `grok-build` to `SCAN_SOURCES`. Then set `SCOUT_SCAN_SOURCE=grok-build` on
+  `grant-wire-grok`. Do not flip first — WRO will reject the batch.
+- **Lane-dead mail:** heartbeat still does not SILENT a wire the other lane fed, but
+  it will page `LANE: Claude` (or Grok) if that producer wrote no ok/skipped ledger
+  row, or failed AUTH/QUOTA, in the window.

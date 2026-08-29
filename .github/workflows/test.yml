@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+  pull_request:
+
+jobs:
+  hermetic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python deps
+        run: pip3 install -r requirements.txt
+      - name: Syntax
+        run: |
+          python3 -m py_compile lib/*.py
+          bash -n run-producer.sh
+          bash -n bin/*.sh
+      - name: test-e2e
+        run: bin/test-e2e.sh
+      - name: test-heartbeat
+        run: bin/test-heartbeat.sh
+      - name: test-grok-engine
+        run: bin/test-grok-engine.sh
+      - name: test-producer-timeout
+        run: bin/test-producer-timeout.sh
+      - name: test-validate
+        run: bin/test-validate.sh

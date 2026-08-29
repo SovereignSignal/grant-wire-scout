@@ -144,7 +144,8 @@ known = open(known_path).read().strip()
 text = open(prompt_path).read().replace("{{KNOWN_PROGRAMS}}", known)
 open(prompt_path, "w").write(text)
 PY
-KNOWN_N=$(grep -c '^- ' "$KNOWN_FILE" 2>/dev/null || echo 0)
+KNOWN_N="$(grep -c '^- ' "$KNOWN_FILE" 2>/dev/null || true)"
+KNOWN_N="${KNOWN_N:-0}"
 echo "[producer] primed with ${KNOWN_N} already-known ${WIRE} programs"
 
 echo "[producer] engine=${ENGINE} wire=${WIRE} variant=${VARIANT} model=${MODEL} run=${RUN_ID}"
@@ -197,6 +198,8 @@ fi
 
 # --- extract the producer payload (the model's `result` text holds our JSON object) ---
 python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.json"
+python3 "${PRODUCER_ROOT}/lib/validate.py" "$RUN_DIR/opportunities.json" \
+  || echo "[producer] validate failed (non-fatal) — continuing"
 
 # --- self-prove: re-fetch each source_url and confirm the claimed facts are on the page ---
 # NON-FATAL: verification is a diagnostic; it must never block delivery of finds (C2).
@@ -205,6 +208,17 @@ env -u INTERNAL_API_KEY -u RESEND_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN -u ALERT_FR
     -u NOTIFICATION_EMAIL -u GROK_AUTH_JSON -u XAI_API_KEY \
   python3 "${PRODUCER_ROOT}/lib/verify.py" "$RUN_DIR/opportunities.json" \
   || echo "[producer] verify failed (non-fatal) — continuing"
+if [[ "${SCOUT_REQUIRE_VERIFIED:-0}" == "1" ]]; then
+  python3 - "${PRODUCER_ROOT}/lib" "$RUN_DIR/opportunities.json" <<'PY' \
+    || echo "[producer] REQUIRE_VERIFIED filter failed (non-fatal) — continuing"
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import validate
+p = Path(sys.argv[2])
+p.write_text(json.dumps(validate.drop_unverified(json.loads(p.read_text())), indent=2))
+PY
+fi
 
 # --- optional: dedup against Wire Room seen-URLs (only if API configured) ---
 if [[ -n "${WIRE_ROOM_API:-}" && -n "${INTERNAL_API_KEY:-}" ]]; then
