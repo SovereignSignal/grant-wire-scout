@@ -62,12 +62,26 @@ def main(run_dir, status, error_class=None):
     if meta.get("found_count") is not None or meta.get("dedup_dropped"):
         extra = (f" found={meta.get('found_count')} "
                  f"dedup_dropped={meta.get('dedup_dropped')}")
-    try:
-        conn = psycopg2.connect(dsn)
-        try:
-            with conn, conn.cursor() as cur:
-                cur.execute(
-                    """INSERT INTO scout_runs
+    row["found_count"] = meta.get("found_count")
+    row["dedup_dropped"] = meta.get("dedup_dropped")
+
+    insert_funnel = """INSERT INTO scout_runs
+                         (run_id, wire, variant, model, status, opportunity_count,
+                          error_class, cost_usd, duration_ms, found_count, dedup_dropped,
+                          finished_at)
+                       VALUES (%(run_id)s, %(wire)s, %(variant)s, %(model)s, %(status)s,
+                               %(opportunity_count)s, %(error_class)s, %(cost_usd)s,
+                               %(duration_ms)s, %(found_count)s, %(dedup_dropped)s, now())
+                       ON CONFLICT (run_id) DO UPDATE SET
+                         status            = EXCLUDED.status,
+                         opportunity_count = EXCLUDED.opportunity_count,
+                         error_class       = EXCLUDED.error_class,
+                         cost_usd          = EXCLUDED.cost_usd,
+                         duration_ms       = EXCLUDED.duration_ms,
+                         found_count       = EXCLUDED.found_count,
+                         dedup_dropped     = EXCLUDED.dedup_dropped,
+                         finished_at       = now()"""
+    insert_base = """INSERT INTO scout_runs
                          (run_id, wire, variant, model, status, opportunity_count,
                           error_class, cost_usd, duration_ms, finished_at)
                        VALUES (%(run_id)s, %(wire)s, %(variant)s, %(model)s, %(status)s,
@@ -79,9 +93,21 @@ def main(run_dir, status, error_class=None):
                          error_class       = EXCLUDED.error_class,
                          cost_usd          = EXCLUDED.cost_usd,
                          duration_ms       = EXCLUDED.duration_ms,
-                         finished_at       = now()""",
-                    row,
-                )
+                         finished_at       = now()"""
+    try:
+        conn = psycopg2.connect(dsn)
+        try:
+            with conn, conn.cursor() as cur:
+                try:
+                    cur.execute(insert_funnel, row)
+                except Exception as col_err:
+                    # Columns land via sql/scout_runs_funnel.sql. Until that
+                    # ALTER runs, fall back so a missing column cannot drop the row.
+                    if "found_count" not in str(col_err) and "dedup_dropped" not in str(col_err):
+                        raise
+                    conn.rollback()
+                    cur.execute(insert_base, row)
+                    extra += " (funnel columns not yet on scout_runs)"
         finally:
             conn.close()
     except Exception as e:

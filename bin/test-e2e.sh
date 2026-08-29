@@ -137,7 +137,8 @@ run_case(){ # <mode> [EXTRA_ENV=val ...]
   rm -f "$CAP/submit.json" "$CAP/alerts.log"
   CASE_OUT="$(env PATH="$TMP/bin:$PATH" CLAUDE="$TMP/bin/claude" CLAUDE_STUB_MODE="$mode" \
      MOCK_BASE="$BASEURL" WIRE_ROOM_API="$BASEURL" INTERNAL_API_KEY=test \
-     NOTIFY_WEBHOOK_URL="$BASEURL/webhook" SCOUT_PRIME_KNOWN=0 MODEL=stub "$@" \
+     NOTIFY_WEBHOOK_URL="$BASEURL/webhook" SCOUT_PRIME_KNOWN=0 MODEL=stub \
+     SCOUT_SKIP_IF_FED_HOURS= SCOUT_REQUIRE_VERIFIED=0 "$@" \
      "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
   local d; d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
   [ -n "$d" ] && RUN_DIRS+=("$d")

@@ -34,6 +34,9 @@ Stringer intake (Hermes cron 12:00 UTC) ──► reads cohorts + Notion DB ─�
 | `lib/hydrate_grok_auth.py` | Write `GROK_AUTH_JSON` to `$GROK_HOME/auth.json` before `grok -p` |
 | `railway.grok.toml` | Third Railway service: same image, `0 6 * * 1,3,5` (Mon/Wed/Fri) |
 | `lib/dedup.py` | Drop URLs already in Wire Room (`/api/scan/seen-urls`) |
+| `lib/validate.py` | Enforce the opportunity schema; optional verified-only gate |
+| `lib/skip_if_fed.py` | Opt-in: skip a wire the other lane just filled |
+| `bin/scoreboard.sh` | Weekly approve-of-decided by source × wire × variant |
 | `runs/<wire>/<variant>/<run_id>/` | Per-run artifact: `opportunities.json`, `report.md`, `raw.json`, `meta.json` |
 
 ## Output contract (the important bit)
@@ -106,25 +109,29 @@ grant discovery), keep Opus available for interactive sessions, and promote to O
 for individual high-value runs. The `--model` flag on `run-producer.sh` makes this a
 per-run choice; the Hermes cron job should pin Sonnet.
 
-## Deployment (thestringer) — pending two unblocks
+## Deployment
 
-1. **Install + auth `claude` on thestringer.** Install the CLI, then run
-   `claude setup-token` **once** (complete the OAuth flow in a browser — the resulting
-   long-lived token persists for headless use). No API key, no `ANTHROPIC_API_KEY`.
-2. **Producer Notion DB `366000c0` not shared with the write integration.** One-time
-   grant in Notion UI (Connections → add integration), OR run the producer cohort-dir-only
-   and have the Stringer ingest the `claude-code` cohort directly (no Notion writes).
+Production is **Railway**, three crons from this image. See [DEPLOY.md](DEPLOY.md).
+Thestringer / Hermes cron / Notion DB `366000c0` are **not** the live path.
 
-Once unblocked: add a Hermes cron job (clone of the intake job) firing
-`run-producer.sh --model claude-sonnet-4-6` per wire at ~04:00 UTC, ahead of the 12:00
-intake. The Stringer's weekly cron-review job will then observe it like every other job.
+| Service | Cron (UTC) | Start |
+|---|---|---|
+| `grant-wire-scout` (Claude) | `0 4 * * 0,2,4,6` | `bin/run-all.sh` |
+| `grant-wire-grok` | `0 6 * * 1,3,5` | `bin/run-grok-all.sh` |
+| `grant-wire-heartbeat` | `0 14 * * *` | `python3 lib/heartbeat.py` |
+
+`railway.toml` historically did not auto-apply on the Claude service — confirm the
+schedule in the Railway UI/API after deploy.
 
 ## Status
 
 - [x] Prompt + schema + wrapper + helpers
-- [x] Live local validation (M5) — see `runs/`
-- [x] Parallel Grok Build engine on the same Railway image (`railway.grok.toml`)
-- [ ] Install + auth `claude` on thestringer
-- [ ] Notion DB access (or cohort-dir intake path)
-- [ ] Hermes cron job (per wire, variant A + B)
-- [ ] Promotion-rate-per-producer dashboard query
+- [x] Live Railway Claude + Grok + heartbeat
+- [x] Dual-lane silence (a wire is silent only if neither lane landed rows)
+- [x] Lane-dead page (one producer can die even when the other fed the wire)
+- [x] `SCOUT_SKIP_IF_FED_HOURS` (opt-in; skip a wire the other lane just filled)
+- [x] Runtime schema validate + optional `SCOUT_REQUIRE_VERIFIED`
+- [x] Standing scoreboard: `./bin/scoreboard.sh 30`
+- [ ] Apply `sql/scout_runs_funnel.sql` on Wire Room Postgres (saturation vs thin)
+- [ ] WRO enum `grok-build` (then set `SCOUT_SCAN_SOURCE=grok-build` on the Grok service)
+- [ ] Promotion scoreboard as a Wire Room view (script exists; pin it somewhere operators look)

@@ -24,6 +24,10 @@ Mon/Wed/Fri 06:00, heartbeat daily 14:00). 52h looks back to 10:00 two days earl
 misses the previous Claude tick (04:00 is 58h before Tue/Thu/Sat 14:00) and Friday's
 lookback also misses Wednesday's Grok tick (56h). 60h covers both.
 
+A wire with rows is never SILENT. A producer lane can still be dead: diagnose_lane()
+pages if Claude (or Grok) has no ok/skipped ledger row, or failed AUTH/QUOTA, even
+when the other lane already fed the queue.
+
 By default this watches BOTH scout lanes (claude-code + grok-scout). After Grok existed,
 "SILENT: oss" no longer meant the oss wire was empty — 2026-08-27 Claude oss was a
 saturation zero while Wednesday Grok had just delivered 5 oss rows. A wire is silent only
@@ -66,6 +70,7 @@ from collections import namedtuple
 _RUN_ID_PREFIX = {
     "claude-code": "claude-code-",
     "grok-scout": "grok-build-",
+    "grok-build": "grok-build-",
 }
 
 
@@ -106,7 +111,14 @@ Trend = namedtuple("Trend", "median days zeros streak")
 
 # Worst status wins when a wire ran more than once in the window: a failed arm is more
 # actionable than a clean one, and auth (needs a token rotation) outranks everything.
-_SEVERITY = {"ok": 0, "auth": 3, "quota": 2}
+# skipped = the lane ran and chose not to burn quota (SCOUT_SKIP_IF_FED_HOURS) — alive.
+_SEVERITY = {"ok": 0, "skipped": 0, "auth": 3, "quota": 2}
+
+_LANE_LABEL = {
+    "claude-code": "Claude",
+    "grok-scout": "Grok",
+    "grok-build": "Grok Build",
+}
 
 
 def _severity(status):
@@ -128,7 +140,12 @@ def collapse_runs(rows):
         return None
     # max() keeps the first maximal element, so ties resolve to the earliest run.
     status = max((r[0] for r in rows), key=_severity)
-    return status, sum((r[1] or 0) for r in rows)
+    opps = sum((r[1] or 0) for r in rows)
+    # Optional found_count (pre-dedup). Absent on older ledger rows / fixtures.
+    if any(len(r) >= 3 and r[2] is not None for r in rows):
+        found = sum((r[2] or 0) for r in rows if len(r) >= 3)
+        return status, opps, found
+    return status, opps
 
 
 def summarize_trend(rows):
@@ -191,7 +208,7 @@ def _auth_remedy():
             "If the Claude lane failed AUTH: re-run `claude setup-token` and update "
             "CLAUDE_CODE_OAUTH_TOKEN on the scout service."
         )
-    if "grok-scout" in sources:
+    if "grok-scout" in sources or "grok-build" in sources:
         bits.append(
             "If the Grok lane failed AUTH: refresh GROK_AUTH_JSON from `grok login` "
             "(contents of ~/.grok/auth.json) on the grok-scout service, or set XAI_API_KEY."
@@ -203,7 +220,9 @@ def _auth_remedy():
             "a run failed AUTH — the claude token was rejected. Re-run "
             "`claude setup-token` and update CLAUDE_CODE_OAUTH_TOKEN on the scout service."
         )
-    if len(bits) == 1 and "grok-scout" in sources and "claude-code" not in sources:
+    grok_only = (("grok-scout" in sources or "grok-build" in sources)
+                 and "claude-code" not in sources)
+    if len(bits) == 1 and grok_only:
         return (
             "a run failed AUTH — Grok Build credentials were rejected. Refresh "
             "GROK_AUTH_JSON from `grok login` (contents of ~/.grok/auth.json) on the "
@@ -215,8 +234,9 @@ def _auth_remedy():
 def diagnose_wire(wire, count, run, trend=None):
     """Explain one wire's delivery, given its queue row count and its collapsed scout_runs rows.
 
-    `run` is None (no run recorded in the window) or a (status, opportunity_count) tuple, as
-    returned by collapse_runs(). `trend` is an optional Trend giving the wire's prior habit.
+    `run` is None (no run recorded in the window) or a (status, opportunity_count) tuple
+    — optionally a third found_count — as returned by collapse_runs(). `trend` is an
+    optional Trend giving the wire's prior habit.
 
     `count` is across every scan_source this heartbeat watches. After Grok existed, a Claude
     saturation zero must not page if the other lane already fed the wire.
@@ -232,12 +252,17 @@ def diagnose_wire(wire, count, run, trend=None):
 
     status = (run[0] or "").strip().lower()
     opps = run[1] or 0
+    found = run[2] if len(run) >= 3 else None
 
     if status == "auth":
         return Diagnosis(wire, True, "auth", _auth_remedy())
     if status == "quota":
         return Diagnosis(wire, True, "quota",
                          "a run hit the Max / SuperGrok usage cap (QUOTA) and produced nothing.")
+    if status == "skipped":
+        return Diagnosis(wire, True, "zero-yield",
+                         "the scout skipped this wire (the other lane had just fed it) and "
+                         "nothing from either lane is in the queue. Not a crash.")
     if status != "ok":
         return Diagnosis(wire, True, status or "unknown",
                          f"a run failed with status '{status or 'unknown'}' — see the scout "
@@ -248,18 +273,69 @@ def diagnose_wire(wire, count, run, trend=None):
                          f"{'opportunity' if opps == 1 else 'opportunities'}, but 0 reached the queue. "
                          "The break is between submit and the queue — a delivery error, or every item "
                          "was deduped as already-seen.")
+    if found:
+        return Diagnosis(wire, True, "saturation",
+                         f"the scout ran cleanly and found {found} "
+                         f"{'candidate' if found == 1 else 'candidates'}, but every one was already "
+                         "in the catalog (dedup emptied the batch). Saturated, not a thin day. "
+                         "No action needed unless it repeats." + _trend_text(trend))
     return Diagnosis(wire, True, "zero-yield",
                      "the scout ran cleanly and found nothing new — either a thin day, or every "
                      "find was already in the catalog (dedup emptied the batch). Not a crash. "
                      "No action needed unless it repeats." + _trend_text(trend))
 
 
-def _fetch(dsn, hours, wires):
-    """Return (counts, runs, trends): queue rows per wire, the wire's collapsed ledger outcome,
-    and its yield habit over the 30 days BEFORE the judged window.
+def source_for_run_id(run_id):
+    """Map a scout_runs.run_id (or a fixture source name) back to a watched scan_source."""
+    if not run_id:
+        return None
+    if run_id in _RUN_ID_PREFIX:
+        return run_id
+    for src in watch_sources():
+        if str(run_id).startswith(run_id_prefix(src)):
+            return src
+    return None
 
-    Each query carries an /* hb:<name> */ marker: two of them read scout_runs, so bin/
-    test-heartbeat.sh's psycopg2 stub can no longer tell them apart by table name alone.
+
+def diagnose_lane(source, run):
+    """Is this producer lane alive, even if the other lane already fed the wires?
+
+    `run` is None (no ledger row for this prefix) or a collapse_runs() tuple.
+    A skip-if-fed tick is alive. AUTH/QUOTA/no-run still page — that is the
+    2026-08-27 hole: Claude AUTH on oss was invisible because Grok had just
+    landed five oss rows.
+    """
+    label = _LANE_LABEL.get(source, source)
+    if run is None:
+        return Diagnosis(source, True, "lane-dead",
+                         f"{label} wrote no scout_runs row in the window — that lane's cron "
+                         "did not run (or died before the ledger write). The other lane may "
+                         "still be feeding the Wire Room. Check that service's logs.")
+    status = (run[0] or "").strip().lower()
+    if status in ("ok", "skipped"):
+        return Diagnosis(source, False, "alive",
+                         f"{label} ran (status={status})")
+    if status == "auth":
+        return Diagnosis(source, True, "lane-auth",
+                         f"{label} failed AUTH. {_auth_remedy()}")
+    if status == "quota":
+        return Diagnosis(source, True, "lane-quota",
+                         f"{label} hit the Max / SuperGrok usage cap (QUOTA).")
+    return Diagnosis(source, True, f"lane-{status or 'unknown'}",
+                     f"{label} failed with status '{status or 'unknown'}'. "
+                     "See that service's logs and its scout_runs rows.")
+
+
+def _fetch(dsn, hours, wires):
+    """Return (counts, runs, trends, lanes).
+
+    counts/runs/trends judge wire-feed (a wire is silent only if NEITHER lane
+    landed rows). lanes is per-producer: None means "skip lane diagnosis"
+    (hermetic fixtures that predate this query); a dict is source → collapsed
+    run or None (no row → that lane is dead even when the other fed the queue).
+
+    Each query carries an /* hb:<name> */ marker so bin/test-heartbeat.sh's
+    psycopg2 stub can tell two scout_runs reads apart.
     """
     import psycopg2
 
@@ -267,6 +343,13 @@ def _fetch(dsn, hours, wires):
     likes = [run_id_prefix(s) + "%" for s in sources]
     conn = psycopg2.connect(dsn)
     try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "/* hb:funnel */ SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'scout_runs' "
+                "AND column_name = 'found_count'",
+            )
+            has_funnel = bool(cur.fetchall())
         with conn.cursor() as cur:
             cur.execute(
                 "/* hb:counts */ SELECT wire, count(*) FROM scan_entries "
@@ -279,17 +362,21 @@ def _fetch(dsn, hours, wires):
             # EVERY run in the window we're judging, not just the newest — a wire runs once per
             # prompt variant per tick, and both lanes can tick inside 60h. "No rows" still
             # means "no run happened in the window" for the watched prefixes.
+            cols = "wire, status, opportunity_count" + (", found_count" if has_funnel else "")
             cur.execute(
-                "/* hb:runs */ SELECT wire, status, opportunity_count FROM scout_runs "
+                f"/* hb:runs */ SELECT {cols} FROM scout_runs "
                 "WHERE created_at > now() - (%s || ' hours')::interval "
                 "AND run_id LIKE ANY(%s) "
                 "ORDER BY wire, created_at",
                 (str(hours), likes),
             )
             grouped = {}
-            for w, s, n in cur.fetchall():
-                if w in wires:
-                    grouped.setdefault(w, []).append((s, n))
+            for row in cur.fetchall():
+                w, s, n = row[0], row[1], row[2]
+                if w not in wires:
+                    continue
+                found = row[3] if has_funnel and len(row) > 3 else None
+                grouped.setdefault(w, []).append((s, n, found) if found is not None else (s, n))
             runs = {w: collapse_runs(rows) for w, rows in grouped.items()}
         with conn.cursor() as cur:
             # One row per wire per prior run-day. Bounded to clean runs: a failed run's 0 says
@@ -298,16 +385,33 @@ def _fetch(dsn, hours, wires):
             cur.execute(
                 "/* hb:trend */ SELECT wire, (created_at AT TIME ZONE 'UTC')::date AS day, "
                 "sum(opportunity_count) FROM scout_runs "
-                "WHERE status = 'ok' AND created_at > now() - interval '30 days' "
+                "WHERE status IN ('ok', 'skipped') AND created_at > now() - interval '30 days' "
                 "AND created_at <= now() - (%s || ' hours')::interval "
                 "AND run_id LIKE ANY(%s) "
                 "GROUP BY wire, day",
                 (str(hours), likes),
             )
             trends = summarize_trend([(w, d, n) for w, d, n in cur.fetchall() if w in wires])
+        with conn.cursor() as cur:
+            cur.execute(
+                "/* hb:lanes */ SELECT run_id, status, opportunity_count FROM scout_runs "
+                "WHERE created_at > now() - (%s || ' hours')::interval "
+                "AND run_id LIKE ANY(%s)",
+                (str(hours), likes),
+            )
+            raw_lanes = list(cur.fetchall())
+            if any((r[0] or "") == "__skip_lanes__" for r in raw_lanes):
+                lanes = None
+            else:
+                by_src = {}
+                for run_id, s, n in raw_lanes:
+                    src = source_for_run_id(run_id)
+                    if src:
+                        by_src.setdefault(src, []).append((s, n))
+                lanes = {src: collapse_runs(by_src.get(src) or []) for src in sources}
     finally:
         conn.close()
-    return counts, runs, trends
+    return counts, runs, trends, lanes
 
 
 def main():
@@ -325,7 +429,7 @@ def main():
         return 2
 
     try:
-        counts, runs, trends = _fetch(dsn, hours, set(wires))
+        counts, runs, trends, lanes = _fetch(dsn, hours, set(wires))
     except Exception as e:
         # The heartbeat couldn't read the DB, so it can't rule silence in OR out. Fail loudly
         # (rc=2 -> Railway's crash mail) rather than staying quiet and looking healthy.
@@ -336,28 +440,48 @@ def main():
     summary = " ".join(f"{d.wire}={counts.get(d.wire, 0)}" for d in results)
     silent = [d for d in results if d.silent]
     source_str = ", ".join(sources)
+    dead_lanes = []
+    if lanes is not None:
+        dead_lanes = [d for s in sources
+                      if (d := diagnose_lane(s, lanes.get(s))).silent]
 
-    if not silent:
+    if not silent and not dead_lanes:
         print(f"heartbeat: ok — {summary} (last {hours:g}h, sources={source_str})")
         return 0
 
-    silent_str = " ".join(d.wire for d in silent)
-    causes = ", ".join(sorted({d.cause for d in silent}))
-    detail = "\n\n".join(f"{d.wire}: [{d.cause}] {d.text}" for d in silent)
-    body = (
-        f"{summary} — SILENT: {silent_str} (last {hours:g}h)\n\n"
-        f"No scout rows (scan_source in {source_str}) reached the Wire Room queue "
-        f"for the above wire(s). Cause per wire, read from the scout_runs ledger:\n\n{detail}\n"
-    )
+    parts = []
+    if silent:
+        parts.append("SILENT: " + " ".join(d.wire for d in silent))
+    if dead_lanes:
+        parts.append("LANE: " + " ".join(_LANE_LABEL.get(d.wire, d.wire) for d in dead_lanes))
+    headline = " · ".join(parts)
+    causes = ", ".join(sorted({d.cause for d in silent + dead_lanes}))
+
+    sections = []
+    if silent:
+        detail = "\n\n".join(f"{d.wire}: [{d.cause}] {d.text}" for d in silent)
+        sections.append(
+            f"No scout rows (scan_source in {source_str}) reached the Wire Room queue "
+            f"for the above wire(s). Cause per wire, read from the scout_runs ledger:\n\n{detail}"
+        )
+    if dead_lanes:
+        detail = "\n\n".join(
+            f"{_LANE_LABEL.get(d.wire, d.wire)}: [{d.cause}] {d.text}" for d in dead_lanes
+        )
+        sections.append(
+            "A producer lane is down or rejected even though the other lane may still "
+            "be feeding the Wire Room:\n\n" + detail
+        )
+    body = f"{summary} — {headline} (last {hours:g}h)\n\n" + "\n\n".join(sections) + "\n"
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     rc = subprocess.run(
         [sys.executable, os.path.join(root, "lib", "notify.py"),
-         f"⚠️ Grant Wire Scout SILENT: {silent_str} ({causes}) — 0 entries in {hours:g}h"],
+         f"⚠️ Grant Wire Scout {headline} ({causes}) — last {hours:g}h"],
         input=body, text=True,
     ).returncode
 
-    print(f"heartbeat: ALERT — {summary} — SILENT: {silent_str} ({causes}) (last {hours:g}h)",
+    print(f"heartbeat: ALERT — {summary} — {headline} ({causes}) (last {hours:g}h)",
           file=sys.stderr)
     if rc != 0:
         # Nobody received the alert. Exit non-zero so Railway's "Deploy Crashed" mail — noise
