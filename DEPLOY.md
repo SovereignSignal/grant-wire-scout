@@ -33,7 +33,8 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
    in the UI). Variables: `DATABASE_URL` (read the shared Wire Room Postgres), `RESEND_API_KEY`,
    `NOTIFICATION_EMAIL`, `ALERT_FROM`, `SCOUT_SILENCE_HOURS=60`. No volume, no claude/grok token.
    Watches **both** `claude-code` and `grok-scout` by default — a wire is silent only when
-   neither lane landed rows. Pin one lane with `SCOUT_SCAN_SOURCE=claude-code` (or
+   neither lane landed rows. Also sends the daily digest (queue + models + week/month
+   spend) unless `SCOUT_DIGEST=0`. Pin one lane with `SCOUT_SCAN_SOURCE=claude-code` (or
    `grok-scout`) if you want an isolated monitor. 60 hours covers the weekday split:
    Tue/Thu/Sat 14:00 still see the previous Claude tick (58h), and Friday still sees
    Wednesday's Grok tick (56h). 52h missed both and paged a saturated Claude oss while
@@ -77,7 +78,11 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
 - **Cadence:** Claude Sun/Tue/Thu/Sat 04:00 UTC; Grok Mon/Wed/Fri 06:00 UTC. Heartbeat
   runs daily at 14:00 UTC against **both** scout sources (`SCOUT_SILENCE_HOURS=60`).
 - **Alerts are exception-only** (`AUTH` / `QUOTA` / `EMPTY` / `DELIVERY` / `FAILED`), plus the
-  heartbeat when a wire is silent across both lanes. No email = healthy.
+  heartbeat when a wire is silent across both lanes. The heartbeat also sends a **daily
+  digest** at 14:00 UTC: what landed in the queue, which models ran, and quota-equivalent
+  spend for today / the last 7 days / the last 30 days / calendar MTD. That mail is
+  visibility, not an incident (`SCOUT_DIGEST=0` turns it off). Exception alerts still
+  fire on their own.
 - **Quota, not dollars.** Both lanes ride subscriptions (Claude Max, SuperGrok). The CLI
   `cost_usd` is accounting-equivalent only. The real budget is the shared usage cap and
   operator review time. Keep `SCOUT_VARIANT=A` (unset used to fall through to A+B).

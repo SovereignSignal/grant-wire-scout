@@ -44,11 +44,15 @@ A zero-yield alert also carries the wire's habit (summarize_trend). opportunity_
 post-dedup, so a clean 0 is either a thin market OR every find was already in the catalog
 — same ledger row, opposite meanings. The copy says both; the trend says whether to look.
 
+A healthy day also sends a daily digest (lib/digest.py) so operators can see what
+landed, which models ran, and week/month quota-equivalent spend. That is visibility,
+not an alert — it does not write scout_alerts. Disable with SCOUT_DIGEST=0.
+
 EXIT CODES — a firing dead-man's-switch is NOT a crashed deploy. The service runs with
 restartPolicyType=NEVER, so any non-zero exit makes Railway send "Deploy Crashed!"; returning 1
 on a successful detection meant every true alert arrived twice, once mislabelled as an outage.
     0  healthy, or silent wire(s) detected AND the alert was delivered  (the switch worked)
-    1  the alert could NOT be delivered — Railway's crash mail is then the intended backstop
+    1  the alert or the daily digest could NOT be delivered — Railway's crash mail is then the backstop
     2  the heartbeat could not do its job at all (no DSN, no driver, DB unreachable)
 
 Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (default 60),
@@ -58,6 +62,8 @@ Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (
      SCOUT_SCAN_SOURCE, if set, pins a single lane (overrides the default pair).
      Ledger rows are scoped by run_id prefix so a dedicated single-lane heartbeat
      does not diagnose the other producer's ticks.
+     SCOUT_DIGEST (default on) sends the daily visibility email after the silence
+     check. SCOUT_DIGEST=0 restores silence-means-healthy-only.
 """
 import os
 import statistics
@@ -445,51 +451,70 @@ def main():
         dead_lanes = [d for s in sources
                       if (d := diagnose_lane(s, lanes.get(s))).silent]
 
+    alert_rc = 0
     if not silent and not dead_lanes:
         print(f"heartbeat: ok — {summary} (last {hours:g}h, sources={source_str})")
-        return 0
+    else:
+        parts = []
+        if silent:
+            parts.append("SILENT: " + " ".join(d.wire for d in silent))
+        if dead_lanes:
+            parts.append("LANE: " + " ".join(_LANE_LABEL.get(d.wire, d.wire) for d in dead_lanes))
+        headline = " · ".join(parts)
+        causes = ", ".join(sorted({d.cause for d in silent + dead_lanes}))
 
-    parts = []
-    if silent:
-        parts.append("SILENT: " + " ".join(d.wire for d in silent))
-    if dead_lanes:
-        parts.append("LANE: " + " ".join(_LANE_LABEL.get(d.wire, d.wire) for d in dead_lanes))
-    headline = " · ".join(parts)
-    causes = ", ".join(sorted({d.cause for d in silent + dead_lanes}))
+        sections = []
+        if silent:
+            detail = "\n\n".join(f"{d.wire}: [{d.cause}] {d.text}" for d in silent)
+            sections.append(
+                f"No scout rows (scan_source in {source_str}) reached the Wire Room queue "
+                f"for the above wire(s). Cause per wire, read from the scout_runs ledger:\n\n{detail}"
+            )
+        if dead_lanes:
+            detail = "\n\n".join(
+                f"{_LANE_LABEL.get(d.wire, d.wire)}: [{d.cause}] {d.text}" for d in dead_lanes
+            )
+            sections.append(
+                "A producer lane is down or rejected even though the other lane may still "
+                "be feeding the Wire Room:\n\n" + detail
+            )
+        body = f"{summary} — {headline} (last {hours:g}h)\n\n" + "\n\n".join(sections) + "\n"
 
-    sections = []
-    if silent:
-        detail = "\n\n".join(f"{d.wire}: [{d.cause}] {d.text}" for d in silent)
-        sections.append(
-            f"No scout rows (scan_source in {source_str}) reached the Wire Room queue "
-            f"for the above wire(s). Cause per wire, read from the scout_runs ledger:\n\n{detail}"
-        )
-    if dead_lanes:
-        detail = "\n\n".join(
-            f"{_LANE_LABEL.get(d.wire, d.wire)}: [{d.cause}] {d.text}" for d in dead_lanes
-        )
-        sections.append(
-            "A producer lane is down or rejected even though the other lane may still "
-            "be feeding the Wire Room:\n\n" + detail
-        )
-    body = f"{summary} — {headline} (last {hours:g}h)\n\n" + "\n\n".join(sections) + "\n"
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        alert_rc = subprocess.run(
+            [sys.executable, os.path.join(root, "lib", "notify.py"),
+             f"⚠️ Grant Wire Scout {headline} ({causes}) — last {hours:g}h"],
+            input=body, text=True,
+        ).returncode
 
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    rc = subprocess.run(
-        [sys.executable, os.path.join(root, "lib", "notify.py"),
-         f"⚠️ Grant Wire Scout {headline} ({causes}) — last {hours:g}h"],
-        input=body, text=True,
-    ).returncode
-
-    print(f"heartbeat: ALERT — {summary} — {headline} ({causes}) (last {hours:g}h)",
-          file=sys.stderr)
-    if rc != 0:
-        # Nobody received the alert. Exit non-zero so Railway's "Deploy Crashed" mail — noise
-        # when the alert DID go out — becomes the alert of last resort.
-        print("heartbeat: alert delivery FAILED — exiting non-zero so the crash mail is the backstop",
+        print(f"heartbeat: ALERT — {summary} — {headline} ({causes}) (last {hours:g}h)",
               file=sys.stderr)
+        if alert_rc != 0:
+            # Nobody received the alert. Exit non-zero so Railway's "Deploy Crashed" mail — noise
+            # when the alert DID go out — becomes the alert of last resort.
+            print("heartbeat: alert delivery FAILED — exiting non-zero so the crash mail is the backstop",
+                  file=sys.stderr)
+
+    # Daily visibility mail. Independent of the dead-man's-switch: a healthy day
+    # still gets a digest so operators can see what landed and what quota was used.
+    # Import here so a digest bug cannot prevent the silence check from running,
+    # and so hermetic heartbeat tests can set SCOUT_DIGEST=0 and skip this path.
+    digest_rc = 0
+    try:
+        import digest as _digest
+        digest_rc = _digest.main()
+    except Exception as e:
+        print(f"heartbeat: digest crashed: {e}", file=sys.stderr)
+        digest_rc = 1
+
+    if alert_rc != 0:
         return 1
-    # Detection worked and the alert was delivered: the switch did its job. Not a crash.
+    if digest_rc == 2:
+        # Digest could not read the DB after the heartbeat already did — treat as
+        # a delivery/ops failure, not "the switch is broken" (that is rc=2 above).
+        return 1
+    if digest_rc != 0:
+        return 1
     return 0
 
 

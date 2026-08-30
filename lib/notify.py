@@ -29,13 +29,16 @@ import urllib.request
 UA = "grant-wire-scout/1.0"
 
 
-def _send_resend(subject, text):
+def _send_resend(subject, text, html=None):
     key = os.environ.get("RESEND_API_KEY", "")
     to = os.environ.get("NOTIFICATION_EMAIL", "")
     frm = os.environ.get("ALERT_FROM", "")
     if not (key and to and frm):
         return False
-    payload = json.dumps({"from": frm, "to": [to], "subject": subject, "text": text}).encode()
+    body = {"from": frm, "to": [to], "subject": subject, "text": text}
+    if html:
+        body["html"] = html
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(
         "https://api.resend.com/emails", data=payload, method="POST",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": UA},
@@ -54,7 +57,9 @@ def _send_webhook(subject, text):
         return False
     msg = f"{subject}\n\n{text}" if (text and text != subject) else subject
     # A generic shape that satisfies Slack ("text"), Discord ("content"), and bespoke receivers.
-    payload = json.dumps({"text": msg, "content": msg, "subject": subject, "body": text}).encode()
+    payload = json.dumps({
+        "text": msg, "content": msg, "subject": subject, "body": text,
+    }).encode()
     req = urllib.request.Request(
         url, data=payload, method="POST",
         headers={"Content-Type": "application/json", "User-Agent": UA},
@@ -86,18 +91,26 @@ def _record_alert(subject, text, channels_ok):
         print(f"notify: alert-record failed (non-fatal): {e}", file=sys.stderr)
 
 
-def send(subject, body):
+def send(subject, body, html=None, record=True):
+    """Send subject+body via Resend, then webhook fallback.
+
+    record=True (default) writes scout_alerts — that is the exception path.
+    Daily digests pass record=False so a healthy day does not look like an alert.
+    html is optional; Resend uses it as the rich part, text stays the fallback.
+    """
     text = body or subject
     delivered = []
-    if _send_resend(subject, text):
+    if _send_resend(subject, text, html=html):
         delivered.append("resend")
     elif _send_webhook(subject, text):      # fallback only if Resend didn't deliver
         delivered.append("webhook")
-    _record_alert(subject, text, ",".join(delivered) or "none")
+    if record:
+        _record_alert(subject, text, ",".join(delivered) or "none")
     if delivered:
         print(f"notify: delivered via {','.join(delivered)} — '{subject}'")
         return 0
-    print(f"notify: NO push channel delivered '{subject}' (recorded to scout_alerts if DB set)", file=sys.stderr)
+    recorded = " (recorded to scout_alerts if DB set)" if record else ""
+    print(f"notify: NO push channel delivered '{subject}'{recorded}", file=sys.stderr)
     return 1
 
 

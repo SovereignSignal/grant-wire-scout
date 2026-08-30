@@ -1,13 +1,18 @@
-# Heartbeat cron service — the dead-man's-switch for scout wire-feed. Create a SECOND
-# Railway service from this same repo and set its "Config file path" (Settings ->
-# Config-as-code) to railway.heartbeat.toml. Needs DATABASE_URL + the Resend alert
-# vars; no volume needed (it never calls claude or grok).
+# Heartbeat cron service — the dead-man's-switch for scout wire-feed, plus the
+# daily visibility digest (lib/digest.py). Create a SECOND Railway service from
+# this same repo and set its "Config file path" (Settings -> Config-as-code) to
+# railway.heartbeat.toml. Needs DATABASE_URL + the Resend alert vars; no volume
+# needed (it never calls claude or grok).
 # Watches both scout lanes by default (claude-code + grok-scout): a wire is silent
 # only when NEITHER producer landed rows. Pin one lane with SCOUT_SCAN_SOURCE if
 # you want an isolated monitor. 60 hours covers the weekday split so Tue/Thu/Sat
 # 14:00 still see the previous Claude tick (58h) and Friday still sees Wednesday's
 # Grok tick (56h). 52h missed both and paged a saturated Claude oss while Grok had
 # just fed the wire.
+# The digest is on by default (SCOUT_DIGEST=1): every 14:00 UTC tick emails what
+# landed in the queue, which models ran, and week/month quota-equivalent spend.
+# Exception alerts still fire separately. Set SCOUT_DIGEST=0 to go back to
+# silence-means-healthy only.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"

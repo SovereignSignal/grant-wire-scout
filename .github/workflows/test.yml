@@ -24,6 +24,8 @@ jobs:
         run: bin/test-e2e.sh
       - name: test-heartbeat
         run: bin/test-heartbeat.sh
+      - name: test-digest
+        run: bin/test-digest.sh
       - name: test-grok-engine
         run: bin/test-grok-engine.sh
       - name: test-producer-timeout
