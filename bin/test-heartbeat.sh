@@ -21,6 +21,9 @@
 #     1  alert delivery failed                                  (Railway's crash mail = backstop)
 #     2  the heartbeat could not do its job (no DSN / DB down)
 #
+# The daily digest (lib/digest.py) is disabled here via SCOUT_DIGEST=0 so these
+# cases stay exception-only. Digest coverage lives in bin/test-digest.sh.
+#
 # Hermetic: psycopg2 is stubbed on PYTHONPATH from a JSON fixture, alerts are captured via
 # notify.py's webhook fallback pointed at a local mock. No network, no prod side effects.
 
@@ -99,6 +102,7 @@ run_hb(){ # $1=fixture json, $2..=extra env assignments
       DATABASE_URL="postgresql://stub/stub" SCOUT_WIRES="crypto ai oss" SCOUT_SILENCE_HOURS=26 \
       SCOUT_SCAN_SOURCE= SCOUT_SCAN_SOURCES= \
       RESEND_API_KEY= NOTIFICATION_EMAIL= ALERT_FROM= \
+      SCOUT_DIGEST=0 \
       NOTIFY_WEBHOOK_URL="http://127.0.0.1:$PORT/webhook" \
       "$@" python3 "$ROOT/lib/heartbeat.py" >"$CAP/out.txt" 2>&1
   echo $?
