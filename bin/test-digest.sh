@@ -155,6 +155,19 @@ check("caps the queue list", "Grant 0" in many_text and "Grant 39" in many_text)
 check("says how many more", "2 more" in many_text)
 check("does not dump the 41st", "Grant 40" not in many_text)
 
+# Layout regression (1 Sep 2026): `amount` is free text from the model. A two-column
+# table with the meta cell set to white-space:nowrap let one long amount push the table
+# past the mail viewport and squeeze every title to one word per line. Each queue item
+# must be a single stacked cell (title over meta) that can always wrap.
+long_amt = [dg.QueueItem(1, "NIH Common Fund PRIMED-AI", "ai",
+                         "not specified (five separate RFAs: RFA-RM-27-011 through RFA-RM-27-015)",
+                         None, None, None, "claude-code", "https://nih.example/rfa", "2026-08-30")]
+_, _, long_html = dg.build(long_amt, [], [], 26, ["claude-code"], now=now)
+qsec = long_html.split("Added to the queue")[1].split("<h3")[0]
+check("queue rows never forbid wrapping", "nowrap" not in qsec)
+check("queue item is one stacked cell, not two columns", qsec.count("<tr") == 1 and qsec.count("<td") == 1)
+check("stacked cell still carries the full meta line", "RFA-RM-27-015" in qsec and "Claude" in qsec)
+
 sys.exit(1 if fails else 0)
 PY
 [ $? -eq 0 ] && ok "render contract" || bad "render contract"

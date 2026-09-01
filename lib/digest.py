@@ -403,7 +403,12 @@ def render_html(queue, runs, spend, hours, sources, now=None):
             rows.append('<p style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555">'
                         'No scout rows in this window.</p>')
     else:
-        rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;border-collapse:collapse">')
+        # One stacked cell per item, never a name/meta column pair: `amount` is free text
+        # from the model and can run long ("not specified (five separate RFAs: ...)"), and a
+        # non-wrapping meta column let one such row push the table past the mail viewport
+        # and squeeze every title to one word per line (1 Sep 2026 digest).
+        rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;'
+                    'border-collapse:collapse;width:100%">')
         for item in queue[:_MAX_QUEUE_ITEMS]:
             href = _ui_href(item.id)
             name = esc(item.name or "(untitled)")
@@ -412,7 +417,8 @@ def render_html(queue, runs, spend, hours, sources, now=None):
                 title += (f' &nbsp; <a href="{esc(item.source_url)}" '
                           f'style="color:#666;font-size:12px">source</a>')
             meta = esc(_item_line(item))
-            rows.append(f'<tr>{cell(title)}{cell(meta, "color:#555;white-space:nowrap")}</tr>')
+            rows.append('<tr><td style="padding:6px 0;vertical-align:top;border-bottom:1px solid #eee">'
+                        f'{title}<br><span style="color:#555;font-size:12px">{meta}</span></td></tr>')
         rows.append('</table>')
         extra = queued - min(queued, _MAX_QUEUE_ITEMS)
         if extra > 0:
