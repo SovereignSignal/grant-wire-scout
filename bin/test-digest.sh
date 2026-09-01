@@ -88,7 +88,7 @@ mail_body(){ cat "$CAP/mail.log" 2>/dev/null; }
 
 echo "== A. render: subject + body contract =="
 python3 - "$ROOT" <<'PY'
-import sys, os
+import sys, os, re
 from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
 import digest as dg
@@ -167,6 +167,11 @@ qsec = long_html.split("Added to the queue")[1].split("<h3")[0]
 check("queue rows never forbid wrapping", "nowrap" not in qsec)
 check("queue item is one stacked cell, not two columns", qsec.count("<tr") == 1 and qsec.count("<td") == 1)
 check("stacked cell still carries the full meta line", "RFA-RM-27-015" in qsec and "Claude" in qsec)
+
+# `font:12px;` is not a valid CSS shorthand (size needs a family); mail clients drop the
+# whole declaration and the footer/captions fall back to 16px serif.
+_, _, full_html = dg.build(many, runs, spend, 26, ["claude-code"], now=now)
+check("every font shorthand names a family", not re.search(r'font:\d+px[;"]', full_html))
 
 sys.exit(1 if fails else 0)
 PY

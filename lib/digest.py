@@ -422,7 +422,7 @@ def render_html(queue, runs, spend, hours, sources, now=None):
         rows.append('</table>')
         extra = queued - min(queued, _MAX_QUEUE_ITEMS)
         if extra > 0:
-            rows.append(f'<p style="font:12px;color:#666">…and {extra} more</p>')
+            rows.append(f'<p style="font:12px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#666">…and {extra} more</p>')
 
     rows.append('<h3 style="font:14px/1.3 -apple-system,Helvetica,Arial,sans-serif;margin:16px 0 8px">'
                 f'Runs ({len(runs)})</h3>')
@@ -443,7 +443,7 @@ def render_html(queue, runs, spend, hours, sources, now=None):
             )
         rows.append('</table>')
     else:
-        rows.append('<p style="font:13px;color:#555">No scout_runs row in the window.</p>')
+        rows.append('<p style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555">No scout_runs row in the window.</p>')
 
     today_models = [s for s in spend if _int(s.runs_today)]
     rows.append('<h3 style="font:14px/1.3 -apple-system,Helvetica,Arial,sans-serif;margin:16px 0 8px">'
@@ -460,7 +460,7 @@ def render_html(queue, runs, spend, hours, sources, now=None):
             )
         rows.append('</table>')
     else:
-        rows.append('<p style="font:13px;color:#555">None recorded.</p>')
+        rows.append('<p style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555">None recorded.</p>')
 
     rows.append('<h3 style="font:14px/1.3 -apple-system,Helvetica,Arial,sans-serif;margin:16px 0 8px">'
                 'Consumption <span style="font-weight:normal;color:#666">'
@@ -476,7 +476,7 @@ def render_html(queue, runs, spend, hours, sources, now=None):
                 f'{cell(esc(_runs_label(_sum_runs(spend, "runs_mtd"))))}</tr>')
     rows.append('</table>')
     if spend:
-        rows.append('<p style="font:12px;color:#555;margin:10px 0 4px">By model — week / month / MTD</p>')
+        rows.append('<p style="font:12px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555;margin:10px 0 4px">By model — week / month / MTD</p>')
         rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;border-collapse:collapse">')
         for s in spend:
             rows.append(
@@ -488,7 +488,7 @@ def render_html(queue, runs, spend, hours, sources, now=None):
             )
         rows.append('</table>')
 
-    rows.append('<p style="font:12px;color:#888;margin-top:16px">'
+    rows.append('<p style="font:12px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#888;margin-top:16px">'
                 'Exception alerts still fire separately if a lane dies or a wire goes silent.</p>')
     return "".join(rows)
 
