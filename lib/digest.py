@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""digest.py — the daily brief: what the scout found, what needs review, what it cost.
+"""digest.py — the daily scout brief, readable in two minutes.
 
-The heartbeat is exception-only (silence = healthy). That left operators with no
-picture of a working day. This mail answers, in order: what landed and needs my
-eyes (with the model's one-line description, the Wire Room's score and why, and
-the deadline), what the Wire Room auto-archived and why (so a bad call is
-visible), how deep the review queue is, how the last week's finds fared, and
-one line each for runs and quota.
+The heartbeat is exception-only (silence = healthy). This mail is the picture of
+a working day, in the order an operator needs it:
 
-Runs as part of the heartbeat cron (14:00 UTC) and as `python3 lib/digest.py`.
-Same Resend / webhook path as alerts, but it does NOT write scout_alerts — a
-healthy digest is not an incident.
+  1. one sentence: who scanned what, how many wait for review, how many were
+     auto-archived or matched;
+  2. two lines per find: name + wire · score · amount · deadline, then the
+     Wire Room's score reason (or the description while a find is unscored);
+  3. auto-archived finds with the reason, one line each, so a bad call is visible;
+  4. the whole Wire Room backlog by wire;
+  5. a Claude-vs-Grok scorecard over the last 7 days — runs, found, verdicts,
+     approve rate, quota — so both lanes show every day even though they
+     alternate weekdays;
+  6. one line for today's runs and one for quota (today / month to date).
+
+The Wire Room's own WireOps digest already carries summaries and deep links for
+every queued entry; this mail does not repeat them. Same Resend / webhook path
+as alerts, but it does NOT write scout_alerts — a healthy digest is not an incident.
 
 Env (same as heartbeat, plus):
   DATABASE_URL, RESEND_API_KEY, NOTIFICATION_EMAIL, ALERT_FROM
@@ -55,14 +62,15 @@ ModelSpend = namedtuple(
 )
 # Whole Wire Room queue (every source), one row per wire.
 Backlog = namedtuple("Backlog", "wire waiting oldest")
-# What became of the scout's finds over the last 7 days, one row per status.
-Outcome = namedtuple("Outcome", "status n")
+# What became of each lane's finds over the last 7 days, one row per (lane, status).
+Outcome = namedtuple("Outcome", "scan_source status n")
+# Every scout run in the last 7 days, for the per-lane scorecard.
+LaneRun = namedtuple("LaneRun", "run_id status opportunity_count found_count cost_usd")
 
-_MAX_REVIEW_ITEMS = 40
+_MAX_REVIEW_ITEMS = 15
 _SOON_DAYS = 14
-_DESC_CHARS = 240
-_REASON_CHARS = 220
-_AMOUNT_CHARS = 120
+_LINE_CHARS = 160
+_AMOUNT_CHARS = 80
 _LANE = {
     "claude-code": "Claude",
     "grok-scout": "Grok",
@@ -71,9 +79,12 @@ _LANE = {
 _OK_STATUSES = ("ok", "skipped", "")
 _FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
 _INK = "#1d1d1f"
+_BODY = "#515154"
 _MUTED = "#6e6e73"
-_RULE = "#d2d2d7"
+_RULE = "#e5e5ea"
+_HAIR = "#ececf0"
 _SOON = "#b45309"
+_PAGE = "#f5f5f7"
 
 
 def enabled():
@@ -118,6 +129,10 @@ def _lane_for_run(run_id):
     if rid.startswith("claude"):
         return "Claude"
     return src or rid or "?"
+
+
+def _lane_for_source(source):
+    return _LANE.get(source, source or "?")
 
 
 def _model_label(model):
@@ -178,10 +193,14 @@ def _ui_href(item_id):
     return f"{base}/queue?entry={item_id}"
 
 
+def _found(run):
+    return _int(run.found_count) if run.found_count is not None else _int(run.opportunity_count)
+
+
 # ---------------------------------------------------------------------- fetch
 
 def fetch(dsn, hours, sources):
-    """Return (queue_items, runs, spend, backlog, outcomes).
+    """Return (queue_items, runs, spend, backlog, outcomes, lane_runs).
 
     Each query is tagged /* digest:<name> */ so the hermetic stub can dispatch
     without guessing from table names (scan_entries and scout_runs are each read
@@ -270,16 +289,36 @@ def fetch(dsn, hours, sources):
             backlog = [Backlog(*row) for row in cur.fetchall()]
         with conn.cursor() as cur:
             cur.execute(
-                "/* digest:outcomes */ SELECT status, count(*) FROM scan_entries "
+                "/* digest:outcomes */ SELECT scan_source, status, count(*) FROM scan_entries "
                 "WHERE scan_source = ANY(%s) "
                 "AND created_at > now() - interval '7 days' "
-                "GROUP BY status ORDER BY 2 DESC",
+                "GROUP BY 1, 2 ORDER BY 1, 3 DESC",
                 (sources,),
             )
             outcomes = [Outcome(*row) for row in cur.fetchall()]
+        with conn.cursor() as cur:
+            if has_funnel:
+                cur.execute(
+                    "/* digest:lane_runs */ SELECT run_id, status, opportunity_count, "
+                    "found_count, cost_usd FROM scout_runs "
+                    "WHERE created_at > now() - interval '7 days' "
+                    "AND run_id LIKE ANY(%s)",
+                    (likes,),
+                )
+                lane_runs = [LaneRun(*row) for row in cur.fetchall()]
+            else:
+                cur.execute(
+                    "/* digest:lane_runs */ SELECT run_id, status, opportunity_count, "
+                    "cost_usd FROM scout_runs "
+                    "WHERE created_at > now() - interval '7 days' "
+                    "AND run_id LIKE ANY(%s)",
+                    (likes,),
+                )
+                lane_runs = [LaneRun(rid, status, opps, None, cost)
+                             for rid, status, opps, cost in cur.fetchall()]
     finally:
         conn.close()
-    return queue, runs, spend, backlog, outcomes
+    return queue, runs, spend, backlog, outcomes, lane_runs
 
 
 # ---------------------------------------------------------------------- brief
@@ -317,12 +356,6 @@ def _due(item, today):
     return f"due {raw}", False
 
 
-def _score_text(item):
-    if item.quality is None:
-        return "not scored yet"
-    return f"score {_int(item.quality)}"
-
-
 def _review_key(item):
     unscored = item.quality is None
     parsed = _as_date(item.deadline_parsed)
@@ -348,8 +381,8 @@ def _funnel_bit(run):
     return f"{wire} {kept} of {found}"
 
 
-def _runs_lines(runs):
-    """One line per lane: lane · model · per-wire funnel · status · cost · time."""
+def _today_lines(runs):
+    """One line per lane that ran: lane · model · per-wire funnel · status · cost · time."""
     lanes = {}
     for r in runs:
         lanes.setdefault(_lane_for_run(r.run_id), []).append(r)
@@ -375,24 +408,75 @@ def _runs_lines(runs):
     return out
 
 
-_OUTCOME_ORDER = ("approved", "declined", "archived", "duplicate", "waiting")
+def _scorecard(sources, outcomes, lane_runs):
+    """Per-lane 7-day rows, in watched-source order, then any lane seen only in data."""
+    labels = []
+    for s in sources:
+        lab = _lane_for_source(s)
+        if lab not in labels:
+            labels.append(lab)
+    data = {}
 
+    def row(lab):
+        if lab not in labels:
+            labels.append(lab)
+        return data.setdefault(lab, {"runs": 0, "ok": 0, "found": 0, "cost": [],
+                                     "approved": 0, "declined": 0, "archived": 0,
+                                     "duplicate": 0, "waiting": 0, "other": 0})
 
-def _outcome_parts(outcomes):
-    counts = {}
+    for r in lane_runs:
+        d = row(_lane_for_run(r.run_id))
+        d["runs"] += 1
+        if (r.status or "").lower() in _OK_STATUSES:
+            d["ok"] += 1
+        d["found"] += _found(r)
+        if r.cost_usd is not None:
+            d["cost"].append(float(r.cost_usd))
     for o in outcomes:
+        d = row(_lane_for_source(o.scan_source))
         s = (o.status or "").strip().lower()
-        if s in ("deduped", "duplicate"):
-            s = "duplicate"
+        if s in ("duplicate", "deduped"):
+            d["duplicate"] += _int(o.n)
         elif s == "queued":
-            s = "waiting"
-        counts[s] = counts.get(s, 0) + _int(o.n)
-    ordered = [s for s in _OUTCOME_ORDER if s in counts]
-    ordered += sorted(s for s in counts if s not in _OUTCOME_ORDER)
-    return sum(counts.values()), [f"{counts[s]} {s}" for s in ordered]
+            d["waiting"] += _int(o.n)
+        elif s in ("approved", "declined", "archived"):
+            d[s] += _int(o.n)
+        else:
+            d["other"] += _int(o.n)
+
+    rows = []
+    for lab in labels:
+        d = data.get(lab) or row(lab)
+        decided = d["approved"] + d["declined"] + d["archived"] + d["duplicate"]
+        rate = f"{round(100 * d['approved'] / decided)}%" if decided else "–"
+        if d["cost"]:
+            quota = _money(sum(d["cost"]))
+        elif d["runs"]:
+            quota = "n/a"
+        else:
+            quota = "–"
+        failed = d["runs"] - d["ok"]
+        rows.append({
+            "lane": lab,
+            "runs": str(d["runs"]),
+            "found": str(d["found"]),
+            "approved": str(d["approved"]),
+            "declined": str(d["declined"]),
+            "archived": str(d["archived"]),
+            "waiting": str(d["waiting"]),
+            "rate": rate,
+            "quota": quota,
+            "note": (f"{failed} failed" if failed else ("no runs" if not d["runs"] else "")),
+        })
+    return rows
 
 
-def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
+_SCORE_COLS = (("lane", "lane"), ("runs", "runs"), ("found", "found"), ("approved", "approved"),
+               ("declined", "declined"), ("archived", "archived"), ("waiting", "waiting"),
+               ("rate", "approve"), ("quota", "quota"))
+
+
+def brief(queue, runs, spend, backlog, outcomes, lane_runs, hours, sources, now=None):
     now = now or _when_utc()
     today = now.date()
     stamp, short = _dateline(now)
@@ -403,8 +487,7 @@ def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
     n_dup = sum(1 for q in handled if (q.status or "").lower() in ("duplicate", "deduped"))
     n_other = len(handled) - n_dup
 
-    found = sum(_int(r.found_count) if r.found_count is not None else _int(r.opportunity_count)
-                for r in runs)
+    found = sum(_found(r) for r in runs)
     lanes, wires = [], []
     for r in runs:
         lane = _lane_for_run(r.run_id)
@@ -415,7 +498,6 @@ def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
     failed = sorted({(r.status or "failed").lower() for r in runs
                      if (r.status or "").lower() not in _OK_STATUSES})
 
-    # subject
     if failed:
         subject = f"Scout · {short} · {', '.join(failed)}"
     elif review:
@@ -423,7 +505,6 @@ def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
     else:
         subject = f"Scout · {short} · nothing to review"
 
-    # headline
     if runs:
         who = " and ".join(lanes) if lanes else "The scout"
         head = f"{who} scanned {', '.join(wires) if wires else 'the wires'} and found {found}."
@@ -445,7 +526,6 @@ def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
     else:
         head = f"No scout run landed in the last {hours:g}h."
 
-    # backlog
     total_wait = sum(_int(b.waiting) for b in backlog)
     if total_wait:
         parts = " · ".join(f"{b.wire or '?'} {_int(b.waiting)}" for b in backlog)
@@ -456,55 +536,43 @@ def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
     else:
         queue_line = "empty — nothing waiting in the Wire Room"
 
-    # 7-day funnel
-    n7, parts7 = _outcome_parts(outcomes)
-    week_line = f"{n7} scout finds → {' · '.join(parts7)}" if n7 else "no scout finds"
-
-    # quota
     today_models = [s for s in spend if _int(s.runs_today)]
     quota_line = (f"{_money(_sum_cost(spend, 'cost_today'))} today · "
-                  f"{_money(_sum_cost(spend, 'cost_7d'))} last 7d · "
                   f"{_money(_sum_cost(spend, 'cost_mtd'))} {now.strftime('%b')} to date")
     by_model = None
     if len(today_models) > 1:
         by_model = " · ".join(f"{_model_label(s.model)} {_money(s.cost_today)}" for s in today_models)
-    na_note = any(s.cost_7d is None and _int(s.runs_7d) for s in spend) or \
-        any(s.cost_today is None and _int(s.runs_today) for s in spend)
+    scorecard = _scorecard(sources, outcomes, lane_runs)
+    na_note = (any(s.cost_7d is None and _int(s.runs_7d) for s in spend)
+               or any(s.cost_today is None and _int(s.runs_today) for s in spend)
+               or any(r["quota"] == "n/a" for r in scorecard))
+
+    def name_of(item):
+        return " ".join(str(item.name or "(untitled)").split())
 
     def card(item):
         due, soon = _due(item, today)
-        meta = [item.wire or "?", _score_text(item)]
+        meta = [item.wire or "?", "unscored" if item.quality is None else str(_int(item.quality))]
         if item.amount:
             meta.append(_clip(item.amount, _AMOUNT_CHARS))
         if due:
             meta.append(due)
-        return {
-            "id": item.id,
-            "name": " ".join(str(item.name or "(untitled)").split()),
-            "desc": _clip(item.description, _DESC_CHARS),
-            "meta": meta,
-            "soon": soon,
-            "why": _clip(item.score_reason, _REASON_CHARS) if item.quality is not None else "",
-            "url": item.source_url,
-        }
+        # Scored: the Wire Room's reason is the useful line. Unscored: the model's
+        # description is all there is. Never both — WireOps already sends summaries.
+        line2 = item.score_reason if item.quality is not None else item.description
+        return {"id": item.id, "name": name_of(item), "meta": meta, "soon": soon,
+                "why": _clip(line2, _LINE_CHARS), "url": item.source_url}
 
     def archived_card(item):
         reason = item.classification_reason or item.score_reason or item.description
-        return {
-            "id": item.id,
-            "name": " ".join(str(item.name or "(untitled)").split()),
-            "meta": [item.wire or "?", _score_text(item)],
-            "why": _clip(reason, _REASON_CHARS),
-            "url": item.source_url,
-        }
+        return {"id": item.id, "name": name_of(item),
+                "meta": [item.wire or "?", "unscored" if item.quality is None else str(_int(item.quality))],
+                "why": _clip(reason, _LINE_CHARS), "url": item.source_url}
 
     def handled_card(item):
-        return {
-            "id": item.id,
-            "name": " ".join(str(item.name or "(untitled)").split()),
-            "meta": [item.wire or "?", (item.status or "?").lower()],
-            "url": item.source_url,
-        }
+        return {"id": item.id, "name": name_of(item),
+                "meta": [item.wire or "?", (item.status or "?").lower()], "why": "",
+                "url": item.source_url}
 
     return {
         "stamp": stamp,
@@ -517,8 +585,8 @@ def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
         "archived": [archived_card(q) for q in archived],
         "handled": [handled_card(q) for q in handled],
         "queue_line": queue_line,
-        "week_line": week_line,
-        "runs_lines": _runs_lines(runs),
+        "scorecard": scorecard,
+        "today_lines": _today_lines(runs),
         "quota_line": quota_line,
         "by_model": by_model,
         "na_note": na_note,
@@ -526,11 +594,26 @@ def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
     }
 
 
-def subject_line(queue, runs, spend, backlog=(), outcomes=(), now=None):
-    return brief(queue, runs, spend, list(backlog), list(outcomes), 26, [], now=now)["subject"]
-
-
 # ------------------------------------------------------------------- renderers
+
+def _text_table(rows):
+    cols = [(key, head) for key, head in _SCORE_COLS]
+    widths = {k: max(len(h), *(len(r[k]) for r in rows)) for k, h in cols} if rows else \
+        {k: len(h) for k, h in cols}
+    def fmt(vals):
+        out = []
+        for i, (k, _) in enumerate(cols):
+            v = vals[k]
+            out.append(v.ljust(widths[k]) if i == 0 else v.rjust(widths[k]))
+        return "  ".join(out).rstrip()
+    lines = [fmt({k: ("" if k == "lane" else h) for k, h in cols})]
+    for r in rows:
+        line = fmt(r)
+        if r["note"]:
+            line += f"  ({r['note']})"
+        lines.append(line)
+    return lines
+
 
 def render_text(b):
     L = [f"SCOUT · {b['stamp'].upper()} · {b['clock']} UTC", b["headline"], ""]
@@ -539,26 +622,19 @@ def render_text(b):
     if not b["review"]:
         L.append("  Nothing." if b["ran"] else "  No scout run in the window.")
     for c in b["review"]:
-        L.append(f"  {c['name']}")
-        if c["desc"]:
-            L.append(f"  {c['desc']}")
-        L.append("  " + " · ".join(c["meta"]))
-        if c["why"]:
-            L.append(f"  Score: {c['why']}")
+        first = f"  {c['name']} · " + " · ".join(c["meta"])
         if c["url"]:
-            L.append(f"  {c['url']}")
-        L.append("")
+            first += f" · {c['url']}"
+        L.append(first)
+        L.append(f"  {c['why']}" if c["why"] else "  (no description)")
     if b["review_more"]:
-        L.append(f"  …and {b['review_more']} more")
-        L.append("")
-    if b["review"] and L[-1] != "":
-        L.append("")
+        L.append(f"  …and {b['review_more']} more in the queue")
+    L.append("")
 
     if b["archived"]:
         L.append(f"AUTO-ARCHIVED ({len(b['archived'])})")
         for c in b["archived"]:
-            L.append(f"  {c['name']}")
-            L.append("  " + " · ".join(c["meta"]) + (f" · {c['why']}" if c["why"] else ""))
+            L.append(f"  {c['name']} · " + " · ".join(c["meta"]) + (f" · {c['why']}" if c["why"] else ""))
         L.append("")
 
     if b["handled"]:
@@ -568,14 +644,17 @@ def render_text(b):
         L.append("")
 
     L.append(f"QUEUE  {b['queue_line']}")
-    L.append(f"LAST 7 DAYS  {b['week_line']}")
+    L.append("")
+    L.append("LANES · LAST 7 DAYS")
+    L.extend("  " + line for line in _text_table(b["scorecard"]))
+    L.append("  approve = approved ÷ decided (approved + declined + archived + duplicate)")
     L.append("")
 
-    if b["runs_lines"]:
-        for i, line in enumerate(b["runs_lines"]):
-            L.append(("Runs: " if i == 0 else "      ") + line)
+    if b["today_lines"]:
+        for i, line in enumerate(b["today_lines"]):
+            L.append(("Today: " if i == 0 else "       ") + line)
     else:
-        L.append("Runs: none in the window.")
+        L.append("Today: no scout run in the window.")
     L.append(f"Quota-equiv (not a bill): {b['quota_line']}")
     if b["by_model"]:
         L.append(f"By model today: {b['by_model']}")
@@ -588,82 +667,109 @@ def render_text(b):
 
 
 def render_html(b):
-    """Email-safe HTML twin of render_text. Stacked blocks only, no columns."""
+    """Email-safe HTML twin of render_text.
+
+    Stacked blocks only, no tables: a long free-text amount crushed a two-column
+    layout on 1 Sep 2026, and a nine-column scorecard overflowed a phone.
+    """
     def esc(s):
         return html.escape("" if s is None else str(s))
 
-    def p(text, size=15, color=_INK, margin="0", weight="normal", extra=""):
-        return (f'<p style="margin:{margin};font:{weight} {size}px/1.45 {_FONT};'
-                f'color:{color};{extra}">{text}</p>')
+    def p(inner, size=15, color=_INK, margin="0", weight="400", lh="1.45", extra=""):
+        return (f'<p style="margin:{margin};font:{weight} {size}px/{lh} {_FONT};'
+                f'color:{color};{extra}">{inner}</p>')
 
-    def h(text):
-        return p(esc(text), size=12, color=_MUTED, margin="26px 0 6px",
-                 weight="600", extra="letter-spacing:.08em;text-transform:uppercase")
+    def label(text):
+        return (f'<p style="margin:26px 0 4px;padding-bottom:6px;border-bottom:1px solid {_RULE};'
+                f'font:600 11px/1.3 {_FONT};color:{_MUTED};letter-spacing:.1em;'
+                f'text-transform:uppercase">{esc(text)}</p>')
 
     def title(c):
         name = esc(c["name"])
         href = _ui_href(c["id"])
-        t = f'<a href="{esc(href)}" style="color:{_INK};text-decoration:none">{name}</a>' if href else name
-        if c.get("url"):
-            t += (f' &nbsp;<a href="{esc(c["url"])}" style="color:{_MUTED};font-size:12px;'
-                  f'font-weight:normal">source ↗</a>')
-        return t
+        return (f'<a href="{esc(href)}" style="color:{_INK};text-decoration:none">{name}</a>'
+                if href else name)
 
-    def meta_html(c):
-        bits = [esc(m) for m in c["meta"]]
-        if c.get("soon"):
-            bits = [f'<span style="color:{_SOON};font-weight:600">{m}</span>' if "soon" in m else m
-                    for m in bits]
+    def meta_html(c, strong_score=True):
+        bits = []
+        for i, m in enumerate(c["meta"]):
+            t = esc(m)
+            if i == 1 and strong_score and m != "unscored":
+                t = f'<span style="color:{_INK};font-weight:600">{t}</span>'
+            elif c.get("soon") and "soon" in m:
+                t = f'<span style="color:{_SOON};font-weight:600">{t}</span>'
+            bits.append(t)
+        if c.get("url"):
+            bits.append(f'<a href="{esc(c["url"])}" style="color:{_MUTED}">source</a>')
         return " · ".join(bits)
 
-    def block(inner):
-        return f'<div style="padding:12px 0;border-top:1px solid {_RULE}">{inner}</div>'
+    def find_block(c, name_size=15):
+        inner = (f'<div style="font:600 {name_size}px/1.4 {_FONT};color:{_INK}">{title(c)} '
+                 f'<span style="font:400 13px/1.4 {_FONT};color:{_MUTED}">· {meta_html(c)}</span></div>')
+        if c.get("why"):
+            inner += f'<div style="margin-top:2px;font:400 13px/1.45 {_FONT};color:{_BODY}">{esc(c["why"])}</div>'
+        return f'<div style="padding:9px 0;border-bottom:1px solid {_HAIR}">{inner}</div>'
 
-    out = [f'<div style="max-width:600px;margin:0 auto;padding:4px 0 16px;font-family:{_FONT}">']
-    out.append(p(f"Scout · {esc(b['stamp'])} · {esc(b['clock'])} UTC", size=12, color=_MUTED,
-                 weight="600", extra="letter-spacing:.08em;text-transform:uppercase"))
-    out.append(p(esc(b["headline"]), size=17, margin="6px 0 0", weight="600"))
+    def one_liner(c):
+        inner = (f'<span style="font:600 14px/1.45 {_FONT};color:{_INK}">{title(c)}</span> '
+                 f'<span style="font:400 13px/1.45 {_FONT};color:{_MUTED}">· {meta_html(c, strong_score=False)}'
+                 + (f' · {esc(c["why"])}' if c.get("why") else "") + "</span>")
+        return f'<div style="padding:7px 0;border-bottom:1px solid {_HAIR}">{inner}</div>'
 
-    out.append(h(f"To review ({b['review_total']})"))
+    out = [f'<div style="background:{_PAGE};padding:20px 10px;font-family:{_FONT}">',
+           f'<div style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid {_RULE};'
+           f'border-radius:12px;padding:22px 24px 18px">']
+    out.append(p(f"Scout · {esc(b['stamp'])} · {esc(b['clock'])} UTC", size=11, color=_MUTED,
+                 weight="600", extra="letter-spacing:.1em;text-transform:uppercase"))
+    out.append(p(esc(b["headline"]), size=18, margin="8px 0 0", weight="600", lh="1.35"))
+
+    out.append(label(f"To review ({b['review_total']})"))
     if not b["review"]:
-        out.append(p("Nothing." if b["ran"] else "No scout run in the window.", color=_MUTED))
+        out.append(p("Nothing." if b["ran"] else "No scout run in the window.", color=_MUTED,
+                     margin="8px 0 0"))
     for c in b["review"]:
-        inner = p(title(c), weight="600")
-        if c["desc"]:
-            inner += p(esc(c["desc"]), margin="3px 0 4px")
-        inner += p(meta_html(c), size=13, color=_MUTED)
-        if c["why"]:
-            inner += p(f'<span style="font-weight:600">Score:</span> {esc(c["why"])}',
-                       size=13, color=_MUTED, margin="3px 0 0")
-        out.append(block(inner))
+        out.append(find_block(c))
     if b["review_more"]:
-        out.append(p(f"…and {b['review_more']} more", size=13, color=_MUTED, margin="8px 0 0"))
+        out.append(p(f"…and {b['review_more']} more in the queue", size=13, color=_MUTED, margin="8px 0 0"))
 
     if b["archived"]:
-        out.append(h(f"Auto-archived ({len(b['archived'])})"))
+        out.append(label(f"Auto-archived ({len(b['archived'])})"))
         for c in b["archived"]:
-            inner = p(title(c), weight="600")
-            why = esc(c["why"])
-            inner += p(meta_html(c) + (f" · {why}" if why else ""), size=13, color=_MUTED, margin="2px 0 0")
-            out.append(block(inner))
+            out.append(one_liner(c))
 
     if b["handled"]:
-        out.append(h(f"Already handled ({len(b['handled'])})"))
+        out.append(label(f"Already handled ({len(b['handled'])})"))
         for c in b["handled"]:
-            out.append(block(p(title(c) + f' <span style="color:{_MUTED};font-size:13px">· '
-                               + meta_html(c) + "</span>")))
+            out.append(one_liner(c))
 
-    out.append(h("Queue"))
-    out.append(p(esc(b["queue_line"])))
-    out.append(h("Last 7 days"))
-    out.append(p(esc(b["week_line"])))
+    out.append(label("Queue"))
+    out.append(p(esc(b["queue_line"]), margin="8px 0 0"))
 
-    out.append(f'<div style="margin-top:26px;padding-top:12px;border-top:1px solid {_RULE}">')
-    if b["runs_lines"]:
-        for i, line in enumerate(b["runs_lines"]):
-            out.append(p(("<b>Runs:</b> " if i == 0 else "") + esc(line), size=13, color=_MUTED))
+    out.append(label("Lanes · last 7 days"))
+    # Stacked rows, not a grid: nine numeric columns overflow a phone and push the
+    # whole card past the viewport. Two lanes read fine as two short lines each.
+    for r in b["scorecard"]:
+        lane = esc(r["lane"])
+        if r["note"]:
+            lane += f' <span style="font-weight:400;color:{_MUTED}">({esc(r["note"])})</span>'
+        head = (f'<span style="font:600 15px/1.4 {_FONT};color:{_INK}">{lane}</span> '
+                f'<span style="font:400 13px/1.4 {_FONT};color:{_MUTED}">· '
+                f'<span style="color:{_INK};font-weight:600">{esc(r["rate"])}</span> approve · '
+                f'<span style="color:{_INK};font-weight:600">{esc(r["quota"])}</span> quota · '
+                f'{esc(r["runs"])} runs · {esc(r["found"])} found</span>')
+        verdicts = (f'{esc(r["approved"])} approved · {esc(r["declined"])} declined · '
+                    f'{esc(r["archived"])} archived · {esc(r["waiting"])} waiting')
+        out.append(f'<div style="padding:8px 0;border-bottom:1px solid {_HAIR}">{head}'
+                   f'<div style="margin-top:1px;font:400 13px/1.45 {_FONT};color:{_BODY}">{verdicts}</div></div>')
+    out.append(p("approve = approved ÷ decided (approved + declined + archived + duplicate)",
+                 size=12, color=_MUTED, margin="6px 0 0"))
+
+    out.append(f'<div style="margin-top:24px;padding-top:12px;border-top:1px solid {_RULE}">')
+    if b["today_lines"]:
+        for i, line in enumerate(b["today_lines"]):
+            out.append(p(("<b>Today:</b> " if i == 0 else "") + esc(line), size=13, color=_MUTED))
     else:
-        out.append(p("<b>Runs:</b> none in the window.", size=13, color=_MUTED))
+        out.append(p("<b>Today:</b> no scout run in the window.", size=13, color=_MUTED))
     out.append(p("<b>Quota-equiv</b> (not a bill): " + esc(b["quota_line"]), size=13, color=_MUTED,
                  margin="4px 0 0"))
     if b["by_model"]:
@@ -673,12 +779,12 @@ def render_html(b):
                      size=12, color=_MUTED, margin="4px 0 0"))
     out.append(p("Exception alerts still fire separately if a lane dies or a wire goes silent.",
                  size=12, color=_MUTED, margin="14px 0 0"))
-    out.append("</div></div>")
+    out.append("</div></div></div>")
     return "".join(out)
 
 
-def build(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
-    b = brief(queue, runs, spend, backlog, outcomes, hours, sources, now=now)
+def build(queue, runs, spend, backlog, outcomes, lane_runs, hours, sources, now=None):
+    b = brief(queue, runs, spend, backlog, outcomes, lane_runs, hours, sources, now=now)
     return b["subject"], render_text(b), render_html(b)
 
 
@@ -699,12 +805,12 @@ def main():
     hours = digest_hours()
     sources = hb.watch_sources()
     try:
-        queue, runs, spend, backlog, outcomes = fetch(dsn, hours, sources)
+        queue, runs, spend, backlog, outcomes, lane_runs = fetch(dsn, hours, sources)
     except Exception as e:
         print(f"digest: DB query failed: {e}", file=sys.stderr)
         return 2
 
-    subject, text, html_body = build(queue, runs, spend, backlog, outcomes, hours, sources)
+    subject, text, html_body = build(queue, runs, spend, backlog, outcomes, lane_runs, hours, sources)
     rc = notify.send(subject, text, html=html_body, record=False)
     if rc == 0:
         print(f"digest: sent — {subject}")
