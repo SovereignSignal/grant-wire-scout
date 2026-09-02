@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""digest.py — daily visibility email for what the scout found, queued, and spent.
+"""digest.py — the daily brief: what the scout found, what needs review, what it cost.
 
 The heartbeat is exception-only (silence = healthy). That left operators with no
-picture of a working day: which grants landed, which models ran, how much Max /
-SuperGrok quota the week and month have used. This fills that gap.
+picture of a working day. This mail answers, in order: what landed and needs my
+eyes (with the model's one-line description, the Wire Room's score and why, and
+the deadline), what the Wire Room auto-archived and why (so a bad call is
+visible), how deep the review queue is, how the last week's finds fared, and
+one line each for runs and quota.
 
 Runs as part of the heartbeat cron (14:00 UTC) and as `python3 lib/digest.py`.
 Same Resend / webhook path as alerts, but it does NOT write scout_alerts — a
@@ -15,7 +18,7 @@ Env (same as heartbeat, plus):
   SCOUT_DIGEST          default on; 0/false/off disables
   SCOUT_DIGEST_HOURS    lookback for "today" (default 26 — covers yesterday's
                         14:00 send through this morning's Claude/Grok tick)
-  WIRE_ROOM_UI          optional; if set, each queued name links to
+  WIRE_ROOM_UI          optional; if set, each title links to
                         {WIRE_ROOM_UI}/queue?entry={id}
 
 EXIT:
@@ -29,7 +32,7 @@ import html
 import os
 import sys
 from collections import namedtuple
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 # Imported for source/prefix helpers only. heartbeat imports digest inside main()
 # so this is not circular at module load.
@@ -38,7 +41,8 @@ import notify
 
 QueueItem = namedtuple(
     "QueueItem",
-    "id name wire amount deadline status quality scan_source source_url created_at",
+    "id name wire amount deadline deadline_parsed status quality score_reason "
+    "classification classification_reason description scan_source source_url created_at",
 )
 RunRow = namedtuple(
     "RunRow",
@@ -49,13 +53,27 @@ ModelSpend = namedtuple(
     "ModelSpend",
     "model runs_today cost_today runs_7d cost_7d runs_30d cost_30d runs_mtd cost_mtd",
 )
+# Whole Wire Room queue (every source), one row per wire.
+Backlog = namedtuple("Backlog", "wire waiting oldest")
+# What became of the scout's finds over the last 7 days, one row per status.
+Outcome = namedtuple("Outcome", "status n")
 
-_MAX_QUEUE_ITEMS = 40
+_MAX_REVIEW_ITEMS = 40
+_SOON_DAYS = 14
+_DESC_CHARS = 240
+_REASON_CHARS = 220
+_AMOUNT_CHARS = 120
 _LANE = {
     "claude-code": "Claude",
     "grok-scout": "Grok",
-    "grok-build": "Grok Build",
+    "grok-build": "Grok",
 }
+_OK_STATUSES = ("ok", "skipped", "")
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+_INK = "#1d1d1f"
+_MUTED = "#6e6e73"
+_RULE = "#d2d2d7"
+_SOON = "#b45309"
 
 
 def enabled():
@@ -69,6 +87,8 @@ def digest_hours():
     except ValueError:
         return 26.0
 
+
+# ---------------------------------------------------------------- small helpers
 
 def _money(n):
     if n is None:
@@ -88,8 +108,16 @@ def _int(n):
         return 0
 
 
-def _lane(source):
-    return _LANE.get(source, source or "?")
+def _lane_for_run(run_id):
+    src = hb.source_for_run_id(run_id)
+    if src in _LANE:
+        return _LANE[src]
+    rid = str(run_id or "")
+    if rid.startswith("grok"):
+        return "Grok"
+    if rid.startswith("claude"):
+        return "Claude"
+    return src or rid or "?"
 
 
 def _model_label(model):
@@ -102,14 +130,62 @@ def _when_utc():
 
 def _dateline(now=None):
     now = now or _when_utc()
-    return now.strftime("%a %-d %b %Y").upper(), now.strftime("%-d %b")
+    return now.strftime("%a %-d %b %Y"), now.strftime("%-d %b")
 
+
+def _as_date(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except ValueError:
+        return None
+
+
+def _clip(s, n):
+    s = " ".join(str(s or "").split())
+    if len(s) <= n:
+        return s
+    cut = s[:n].rsplit(" ", 1)[0]
+    return cut.rstrip(" ,;:(-") + "…"
+
+
+def _plural(n, one, many=None):
+    n = _int(n)
+    return f"{n} {one if n == 1 else (many or one + 's')}"
+
+
+def _duration(ms):
+    if not ms:
+        return ""
+    try:
+        sec = int(ms) / 1000
+    except (TypeError, ValueError):
+        return ""
+    if sec < 90:
+        return f"{sec:.0f}s"
+    return f"{sec / 60:.0f}m"
+
+
+def _ui_href(item_id):
+    base = (os.environ.get("WIRE_ROOM_UI") or "").rstrip("/")
+    if not base or item_id is None:
+        return None
+    return f"{base}/queue?entry={item_id}"
+
+
+# ---------------------------------------------------------------------- fetch
 
 def fetch(dsn, hours, sources):
-    """Return (queue_items, runs, spend).
+    """Return (queue_items, runs, spend, backlog, outcomes).
 
     Each query is tagged /* digest:<name> */ so the hermetic stub can dispatch
-    without guessing from table names (scout_runs is read twice).
+    without guessing from table names (scan_entries and scout_runs are each read
+    more than once).
     """
     import psycopg2
 
@@ -125,12 +201,13 @@ def fetch(dsn, hours, sources):
             has_funnel = bool(cur.fetchall())
         with conn.cursor() as cur:
             cur.execute(
-                "/* digest:queue */ SELECT id, name, wire, amount, deadline, status, "
-                "quality_score, scan_source, source_url, created_at "
+                "/* digest:queue */ SELECT id, name, wire, amount, deadline, deadline_parsed, "
+                "status, quality_score, quality_breakdown->>'scoreReason', classification, "
+                "classification_reason, description, scan_source, source_url, created_at "
                 "FROM scan_entries "
                 "WHERE scan_source = ANY(%s) "
                 "AND created_at > now() - (%s || ' hours')::interval "
-                "ORDER BY wire, created_at DESC",
+                "ORDER BY created_at DESC",
                 (sources, str(hours)),
             )
             queue = [QueueItem(*row) for row in cur.fetchall()]
@@ -182,10 +259,32 @@ def fetch(dsn, hours, sources):
                 (str(hours), str(hours), likes),
             )
             spend = [ModelSpend(*row) for row in cur.fetchall()]
+        with conn.cursor() as cur:
+            # The whole queue, every source: this is what the operator sees in the
+            # Wire Room, so it is the honest measure of "am I keeping up".
+            cur.execute(
+                "/* digest:backlog */ SELECT wire, count(*), min(created_at) "
+                "FROM scan_entries WHERE status = 'queued' "
+                "GROUP BY wire ORDER BY 2 DESC",
+            )
+            backlog = [Backlog(*row) for row in cur.fetchall()]
+        with conn.cursor() as cur:
+            cur.execute(
+                "/* digest:outcomes */ SELECT status, count(*) FROM scan_entries "
+                "WHERE scan_source = ANY(%s) "
+                "AND created_at > now() - interval '7 days' "
+                "GROUP BY status ORDER BY 2 DESC",
+                (sources,),
+            )
+            outcomes = [Outcome(*row) for row in cur.fetchall()]
     finally:
         conn.close()
-    return queue, runs, spend
+    return queue, runs, spend, backlog, outcomes
 
+
+# ---------------------------------------------------------------------- brief
+# One pass over the raw rows produces every string both renderers need, so the
+# text and HTML twins cannot drift.
 
 def _sum_cost(rows, attr):
     vals = [getattr(r, attr) for r in rows if getattr(r, attr) is not None]
@@ -197,308 +296,390 @@ def _sum_cost(rows, attr):
     return float(sum(vals))
 
 
-def _sum_runs(rows, attr):
-    return sum(_int(getattr(r, attr)) for r in rows)
+def _due(item, today):
+    """(text, soon) for the deadline, or (None, False)."""
+    parsed = _as_date(item.deadline_parsed)
+    if parsed:
+        days = (parsed - today).days
+        label = parsed.strftime("%-d %b")
+        if days < 0:
+            return f"due {label} (passed)", False
+        if days == 0:
+            return f"due {label} (today, soon)", True
+        if days <= _SOON_DAYS:
+            return f"due {label} ({_plural(days, 'day')}, soon)", True
+        return f"due {label} ({_plural(days, 'day')})", False
+    raw = " ".join(str(item.deadline or "").split())
+    if not raw:
+        return None, False
+    if raw.lower() in ("rolling", "continuous", "ongoing", "open", "none"):
+        return "rolling", False
+    return f"due {raw}", False
 
 
-def _runs_label(n):
-    n = _int(n)
-    return f"{n} run" if n == 1 else f"{n} runs"
+def _score_text(item):
+    if item.quality is None:
+        return "not scored yet"
+    return f"score {_int(item.quality)}"
 
 
-def subject_line(queue, runs, spend, now=None):
-    _, short = _dateline(now)
-    n = len(queue)
-    today = _sum_cost(spend, "cost_today")
-    queued = f"{n} queued" if n else "nothing queued"
-    if today is None:
-        money = "quota n/a"
-    else:
-        money = f"{_money(today)} today"
-    failed = [r for r in runs if (r.status or "").lower() not in ("ok", "skipped", "")]
-    if failed:
-        kinds = sorted({(r.status or "failed").lower() for r in failed})
-        return f"Scout · {short} — {queued} · {', '.join(kinds)}"
-    return f"Scout · {short} — {queued} · {money}"
+def _review_key(item):
+    unscored = item.quality is None
+    parsed = _as_date(item.deadline_parsed)
+    return (
+        1 if unscored else 0,
+        -_int(item.quality) if not unscored else 0,
+        parsed or date.max,
+    )
 
 
-def _duration(ms):
-    if not ms:
-        return ""
-    try:
-        sec = int(ms) / 1000
-    except (TypeError, ValueError):
-        return ""
-    if sec < 90:
-        return f"{sec:.0f}s"
-    return f"{sec / 60:.0f}m"
-
-
-def _run_funnel(run):
+def _funnel_bit(run):
     kept = _int(run.opportunity_count)
+    wire = run.wire or "?"
     found = run.found_count
-    dropped = run.dedup_dropped
-    if found is not None:
-        bit = f"found {found} → submitted {kept}"
-        if dropped:
-            bit += f" ({dropped} already known)"
-        elif found and not kept:
-            bit += " (all already known)"
-        return bit
-    return f"submitted {kept}"
+    if found is None or _int(found) == kept:
+        return f"{wire} {kept}"
+    found = _int(found)
+    dropped = _int(run.dedup_dropped)
+    if kept == 0 and found:
+        return f"{wire} 0 of {found} (all known)"
+    if dropped:
+        return f"{wire} {kept} of {found} ({dropped} known)"
+    return f"{wire} {kept} of {found}"
 
 
-def _item_line(item):
-    bits = [item.wire or "?", _lane(item.scan_source)]
-    if item.amount:
-        bits.append(str(item.amount))
-    if item.deadline:
-        bits.append(f"due {item.deadline}")
-    if item.status:
-        bits.append(item.status)
-    if item.quality is not None:
-        bits.append(f"q{item.quality}")
-    return " · ".join(str(b) for b in bits if b)
-
-
-def render_text(queue, runs, spend, hours, sources, now=None):
-    now = now or _when_utc()
-    stamp, _ = _dateline(now)
-    found = sum(_int(r.found_count) if r.found_count is not None else _int(r.opportunity_count)
-                for r in runs)
-    submitted = sum(_int(r.opportunity_count) for r in runs)
-    queued = len(queue)
-    today_cost = _sum_cost(spend, "cost_today")
-    week_cost = _sum_cost(spend, "cost_7d")
-    month_cost = _sum_cost(spend, "cost_30d")
-    mtd_cost = _sum_cost(spend, "cost_mtd")
-    month_name = now.strftime("%b")
-
-    lines = [
-        f"GRANT WIRE SCOUT  ·  {stamp}  ·  {now.strftime('%H:%M')} UTC",
-        "",
-        f"Last {hours:g}h  ·  sources: {', '.join(sources)}",
-        f"Found {found}  ·  submitted {submitted}  ·  landed in queue {queued}"
-        f"  ·  {_money(today_cost)} quota-equiv today",
-        "",
-    ]
-
-    lines.append(f"ADDED TO THE QUEUE ({queued})")
-    if not queue:
-        if runs:
-            lines.append("  Nothing new landed. The scout ran; every find was already")
-            lines.append("  in the catalog, or the batch was empty after the currency gate.")
+def _runs_lines(runs):
+    """One line per lane: lane · model · per-wire funnel · status · cost · time."""
+    lanes = {}
+    for r in runs:
+        lanes.setdefault(_lane_for_run(r.run_id), []).append(r)
+    out = []
+    for lane, rows in lanes.items():
+        models = []
+        for r in rows:
+            m = _model_label(r.model)
+            if m not in models:
+                models.append(m)
+        failed = [r for r in rows if (r.status or "").lower() not in _OK_STATUSES]
+        if failed:
+            status = ", ".join(f"{r.wire or '?'} {(r.status or 'failed').lower()}" for r in failed)
         else:
-            lines.append("  No scout rows in this window — no producer tick landed.")
-    else:
-        shown = queue[:_MAX_QUEUE_ITEMS]
-        by_wire = {}
-        for item in shown:
-            by_wire.setdefault(item.wire or "?", []).append(item)
-        for wire, items in by_wire.items():
-            lines.append(f"  {wire} ({len(items)})")
-            for item in items:
-                lines.append(f"    • {item.name or '(untitled)'}")
-                lines.append(f"      {_item_line(item)}")
-                if item.source_url:
-                    lines.append(f"      {item.source_url}")
-        extra = queued - len(shown)
-        if extra > 0:
-            lines.append(f"  …and {extra} more")
-    lines.append("")
-
-    lines.append(f"RUNS ({len(runs)})")
-    if not runs:
-        lines.append("  No scout_runs row in the window.")
-    else:
-        for r in runs:
-            lane = _lane(hb.source_for_run_id(r.run_id) or r.run_id)
-            dur = _duration(r.duration_ms)
-            dur_bit = f"  {dur}" if dur else ""
-            cost = _money(r.cost_usd) if r.cost_usd is not None else "n/a"
-            lines.append(
-                f"  {lane}  {r.wire or '?'} / {r.variant or '?'}  "
-                f"{_model_label(r.model)}  {r.status or '?'}  "
-                f"{_run_funnel(r)}  {cost}{dur_bit}"
-            )
-    lines.append("")
-
-    today_models = [s for s in spend if _int(s.runs_today)]
-    lines.append("MODELS USED (this window)")
-    if not today_models:
-        lines.append("  None recorded.")
-    else:
-        for s in today_models:
-            lines.append(
-                f"  {_model_label(s.model)}  ·  { _int(s.runs_today) } run"
-                f"{'' if _int(s.runs_today) == 1 else 's'}  ·  {_money(s.cost_today)}"
-            )
-    lines.append("")
-
-    lines.append("CONSUMPTION  (quota-equivalent — Max / SuperGrok, not a bill)")
-    lines.append(f"  Today     {_money(today_cost)}   ({_runs_label(_sum_runs(spend, 'runs_today'))})")
-    lines.append(f"  Week      {_money(week_cost)}   (last 7 days, {_runs_label(_sum_runs(spend, 'runs_7d'))})")
-    lines.append(f"  Month     {_money(month_cost)}   (last 30 days, {_runs_label(_sum_runs(spend, 'runs_30d'))})")
-    lines.append(f"  {month_name} MTD   {_money(mtd_cost)}   ({_runs_label(_sum_runs(spend, 'runs_mtd'))})")
-    if spend:
-        lines.append("  By model (week / month / MTD)")
-        for s in spend:
-            lines.append(
-                f"    {_model_label(s.model):<22}  "
-                f"{_money(s.cost_7d)} / {_money(s.cost_30d)} / {_money(s.cost_mtd)}   "
-                f"({_int(s.runs_7d)} / {_int(s.runs_30d)} / {_int(s.runs_mtd)} runs)"
-            )
-        if any(s.cost_7d is None and _int(s.runs_7d) for s in spend):
-            lines.append("  n/a = that CLI did not report a $ equivalent (typical for SuperGrok).")
-    lines.append("")
-    lines.append("Exception alerts still fire separately if a lane dies or a wire goes silent.")
-    lines.append("")
-    return "\n".join(lines)
+            status = "all ok"
+        costs = [r.cost_usd for r in rows if r.cost_usd is not None]
+        cost = _money(sum(float(c) for c in costs)) if costs else "n/a"
+        bits = [lane, "/".join(models), ", ".join(_funnel_bit(r) for r in rows), status, cost]
+        dur = _duration(sum(_int(r.duration_ms) for r in rows))
+        if dur:
+            bits.append(dur)
+        out.append(" · ".join(bits))
+    return out
 
 
-def _ui_href(item_id):
-    base = (os.environ.get("WIRE_ROOM_UI") or "").rstrip("/")
-    if not base or item_id is None:
-        return None
-    return f"{base}/queue?entry={item_id}"
+_OUTCOME_ORDER = ("approved", "declined", "archived", "duplicate", "waiting")
 
 
-def render_html(queue, runs, spend, hours, sources, now=None):
-    """Email-safe HTML twin of render_text. Tables, no external CSS."""
+def _outcome_parts(outcomes):
+    counts = {}
+    for o in outcomes:
+        s = (o.status or "").strip().lower()
+        if s in ("deduped", "duplicate"):
+            s = "duplicate"
+        elif s == "queued":
+            s = "waiting"
+        counts[s] = counts.get(s, 0) + _int(o.n)
+    ordered = [s for s in _OUTCOME_ORDER if s in counts]
+    ordered += sorted(s for s in counts if s not in _OUTCOME_ORDER)
+    return sum(counts.values()), [f"{counts[s]} {s}" for s in ordered]
+
+
+def brief(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
     now = now or _when_utc()
-    stamp, _ = _dateline(now)
+    today = now.date()
+    stamp, short = _dateline(now)
+
+    review = sorted((q for q in queue if (q.status or "").lower() == "queued"), key=_review_key)
+    archived = [q for q in queue if (q.status or "").lower() == "archived"]
+    handled = [q for q in queue if (q.status or "").lower() not in ("queued", "archived")]
+    n_dup = sum(1 for q in handled if (q.status or "").lower() in ("duplicate", "deduped"))
+    n_other = len(handled) - n_dup
+
     found = sum(_int(r.found_count) if r.found_count is not None else _int(r.opportunity_count)
                 for r in runs)
-    submitted = sum(_int(r.opportunity_count) for r in runs)
-    queued = len(queue)
-    today_cost = _sum_cost(spend, "cost_today")
-    week_cost = _sum_cost(spend, "cost_7d")
-    month_cost = _sum_cost(spend, "cost_30d")
-    mtd_cost = _sum_cost(spend, "cost_mtd")
-    month_name = now.strftime("%b")
+    lanes, wires = [], []
+    for r in runs:
+        lane = _lane_for_run(r.run_id)
+        if lane not in lanes:
+            lanes.append(lane)
+        if r.wire and r.wire not in wires:
+            wires.append(r.wire)
+    failed = sorted({(r.status or "failed").lower() for r in runs
+                     if (r.status or "").lower() not in _OK_STATUSES})
 
+    # subject
+    if failed:
+        subject = f"Scout · {short} · {', '.join(failed)}"
+    elif review:
+        subject = f"Scout · {short} · {len(review)} to review"
+    else:
+        subject = f"Scout · {short} · nothing to review"
+
+    # headline
+    if runs:
+        who = " and ".join(lanes) if lanes else "The scout"
+        head = f"{who} scanned {', '.join(wires) if wires else 'the wires'} and found {found}."
+        if review:
+            head += f" {len(review)} waiting for your review."
+        elif queue:
+            head += " Nothing new is waiting for your review."
+        else:
+            head += (" Nothing new landed: every find was already in the catalog, "
+                     "or the batch was empty after the currency gate.")
+        if archived:
+            head += f" {len(archived)} auto-archived."
+        if n_dup:
+            head += f" {_plural(n_dup, 'duplicate')}."
+        if n_other:
+            head += f" {n_other} already handled."
+        if failed:
+            head += f" Failures: {', '.join(failed)}."
+    else:
+        head = f"No scout run landed in the last {hours:g}h."
+
+    # backlog
+    total_wait = sum(_int(b.waiting) for b in backlog)
+    if total_wait:
+        parts = " · ".join(f"{b.wire or '?'} {_int(b.waiting)}" for b in backlog)
+        oldest = [d for d in (_as_date(b.oldest) for b in backlog) if d]
+        queue_line = f"{total_wait} waiting in the Wire Room ({parts})"
+        if oldest:
+            queue_line += f" · oldest {min(oldest).strftime('%-d %b')}"
+    else:
+        queue_line = "empty — nothing waiting in the Wire Room"
+
+    # 7-day funnel
+    n7, parts7 = _outcome_parts(outcomes)
+    week_line = f"{n7} scout finds → {' · '.join(parts7)}" if n7 else "no scout finds"
+
+    # quota
+    today_models = [s for s in spend if _int(s.runs_today)]
+    quota_line = (f"{_money(_sum_cost(spend, 'cost_today'))} today · "
+                  f"{_money(_sum_cost(spend, 'cost_7d'))} last 7d · "
+                  f"{_money(_sum_cost(spend, 'cost_mtd'))} {now.strftime('%b')} to date")
+    by_model = None
+    if len(today_models) > 1:
+        by_model = " · ".join(f"{_model_label(s.model)} {_money(s.cost_today)}" for s in today_models)
+    na_note = any(s.cost_7d is None and _int(s.runs_7d) for s in spend) or \
+        any(s.cost_today is None and _int(s.runs_today) for s in spend)
+
+    def card(item):
+        due, soon = _due(item, today)
+        meta = [item.wire or "?", _score_text(item)]
+        if item.amount:
+            meta.append(_clip(item.amount, _AMOUNT_CHARS))
+        if due:
+            meta.append(due)
+        return {
+            "id": item.id,
+            "name": " ".join(str(item.name or "(untitled)").split()),
+            "desc": _clip(item.description, _DESC_CHARS),
+            "meta": meta,
+            "soon": soon,
+            "why": _clip(item.score_reason, _REASON_CHARS) if item.quality is not None else "",
+            "url": item.source_url,
+        }
+
+    def archived_card(item):
+        reason = item.classification_reason or item.score_reason or item.description
+        return {
+            "id": item.id,
+            "name": " ".join(str(item.name or "(untitled)").split()),
+            "meta": [item.wire or "?", _score_text(item)],
+            "why": _clip(reason, _REASON_CHARS),
+            "url": item.source_url,
+        }
+
+    def handled_card(item):
+        return {
+            "id": item.id,
+            "name": " ".join(str(item.name or "(untitled)").split()),
+            "meta": [item.wire or "?", (item.status or "?").lower()],
+            "url": item.source_url,
+        }
+
+    return {
+        "stamp": stamp,
+        "clock": now.strftime("%H:%M"),
+        "subject": subject,
+        "headline": head,
+        "review": [card(q) for q in review[:_MAX_REVIEW_ITEMS]],
+        "review_total": len(review),
+        "review_more": max(0, len(review) - _MAX_REVIEW_ITEMS),
+        "archived": [archived_card(q) for q in archived],
+        "handled": [handled_card(q) for q in handled],
+        "queue_line": queue_line,
+        "week_line": week_line,
+        "runs_lines": _runs_lines(runs),
+        "quota_line": quota_line,
+        "by_model": by_model,
+        "na_note": na_note,
+        "ran": bool(runs),
+    }
+
+
+def subject_line(queue, runs, spend, backlog=(), outcomes=(), now=None):
+    return brief(queue, runs, spend, list(backlog), list(outcomes), 26, [], now=now)["subject"]
+
+
+# ------------------------------------------------------------------- renderers
+
+def render_text(b):
+    L = [f"SCOUT · {b['stamp'].upper()} · {b['clock']} UTC", b["headline"], ""]
+
+    L.append(f"TO REVIEW ({b['review_total']})")
+    if not b["review"]:
+        L.append("  Nothing." if b["ran"] else "  No scout run in the window.")
+    for c in b["review"]:
+        L.append(f"  {c['name']}")
+        if c["desc"]:
+            L.append(f"  {c['desc']}")
+        L.append("  " + " · ".join(c["meta"]))
+        if c["why"]:
+            L.append(f"  Score: {c['why']}")
+        if c["url"]:
+            L.append(f"  {c['url']}")
+        L.append("")
+    if b["review_more"]:
+        L.append(f"  …and {b['review_more']} more")
+        L.append("")
+    if b["review"] and L[-1] != "":
+        L.append("")
+
+    if b["archived"]:
+        L.append(f"AUTO-ARCHIVED ({len(b['archived'])})")
+        for c in b["archived"]:
+            L.append(f"  {c['name']}")
+            L.append("  " + " · ".join(c["meta"]) + (f" · {c['why']}" if c["why"] else ""))
+        L.append("")
+
+    if b["handled"]:
+        L.append(f"ALREADY HANDLED ({len(b['handled'])})")
+        for c in b["handled"]:
+            L.append(f"  {c['name']} · " + " · ".join(c["meta"]))
+        L.append("")
+
+    L.append(f"QUEUE  {b['queue_line']}")
+    L.append(f"LAST 7 DAYS  {b['week_line']}")
+    L.append("")
+
+    if b["runs_lines"]:
+        for i, line in enumerate(b["runs_lines"]):
+            L.append(("Runs: " if i == 0 else "      ") + line)
+    else:
+        L.append("Runs: none in the window.")
+    L.append(f"Quota-equiv (not a bill): {b['quota_line']}")
+    if b["by_model"]:
+        L.append(f"By model today: {b['by_model']}")
+    if b["na_note"]:
+        L.append("n/a = that CLI did not report a $ equivalent (typical for SuperGrok).")
+    L.append("")
+    L.append("Exception alerts still fire separately if a lane dies or a wire goes silent.")
+    L.append("")
+    return "\n".join(L)
+
+
+def render_html(b):
+    """Email-safe HTML twin of render_text. Stacked blocks only, no columns."""
     def esc(s):
         return html.escape("" if s is None else str(s))
 
-    def cell(s, extra=""):
-        return f'<td style="padding:4px 10px 4px 0;vertical-align:top;{extra}">{s}</td>'
+    def p(text, size=15, color=_INK, margin="0", weight="normal", extra=""):
+        return (f'<p style="margin:{margin};font:{weight} {size}px/1.45 {_FONT};'
+                f'color:{color};{extra}">{text}</p>')
 
-    rows = []
-    rows.append(
-        f'<p style="font:14px/1.4 -apple-system,Helvetica,Arial,sans-serif;margin:0 0 12px">'
-        f'<b>GRANT WIRE SCOUT</b> &nbsp; {esc(stamp)} &nbsp; {esc(now.strftime("%H:%M"))} UTC<br>'
-        f'<span style="color:#555">Last {hours:g}h · {esc(", ".join(sources))} · '
-        f'found {found} · submitted {submitted} · queued {queued} · '
-        f'{esc(_money(today_cost))} today</span></p>'
-    )
+    def h(text):
+        return p(esc(text), size=12, color=_MUTED, margin="26px 0 6px",
+                 weight="600", extra="letter-spacing:.08em;text-transform:uppercase")
 
-    rows.append('<h3 style="font:14px/1.3 -apple-system,Helvetica,Arial,sans-serif;margin:16px 0 8px">'
-                f'Added to the queue ({queued})</h3>')
-    if not queue:
-        if runs:
-            rows.append('<p style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555">'
-                        'Nothing new landed. The scout ran; finds were already in the catalog '
-                        'or the batch was empty after the currency gate.</p>')
-        else:
-            rows.append('<p style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555">'
-                        'No scout rows in this window.</p>')
+    def title(c):
+        name = esc(c["name"])
+        href = _ui_href(c["id"])
+        t = f'<a href="{esc(href)}" style="color:{_INK};text-decoration:none">{name}</a>' if href else name
+        if c.get("url"):
+            t += (f' &nbsp;<a href="{esc(c["url"])}" style="color:{_MUTED};font-size:12px;'
+                  f'font-weight:normal">source ↗</a>')
+        return t
+
+    def meta_html(c):
+        bits = [esc(m) for m in c["meta"]]
+        if c.get("soon"):
+            bits = [f'<span style="color:{_SOON};font-weight:600">{m}</span>' if "soon" in m else m
+                    for m in bits]
+        return " · ".join(bits)
+
+    def block(inner):
+        return f'<div style="padding:12px 0;border-top:1px solid {_RULE}">{inner}</div>'
+
+    out = [f'<div style="max-width:600px;margin:0 auto;padding:4px 0 16px;font-family:{_FONT}">']
+    out.append(p(f"Scout · {esc(b['stamp'])} · {esc(b['clock'])} UTC", size=12, color=_MUTED,
+                 weight="600", extra="letter-spacing:.08em;text-transform:uppercase"))
+    out.append(p(esc(b["headline"]), size=17, margin="6px 0 0", weight="600"))
+
+    out.append(h(f"To review ({b['review_total']})"))
+    if not b["review"]:
+        out.append(p("Nothing." if b["ran"] else "No scout run in the window.", color=_MUTED))
+    for c in b["review"]:
+        inner = p(title(c), weight="600")
+        if c["desc"]:
+            inner += p(esc(c["desc"]), margin="3px 0 4px")
+        inner += p(meta_html(c), size=13, color=_MUTED)
+        if c["why"]:
+            inner += p(f'<span style="font-weight:600">Score:</span> {esc(c["why"])}',
+                       size=13, color=_MUTED, margin="3px 0 0")
+        out.append(block(inner))
+    if b["review_more"]:
+        out.append(p(f"…and {b['review_more']} more", size=13, color=_MUTED, margin="8px 0 0"))
+
+    if b["archived"]:
+        out.append(h(f"Auto-archived ({len(b['archived'])})"))
+        for c in b["archived"]:
+            inner = p(title(c), weight="600")
+            why = esc(c["why"])
+            inner += p(meta_html(c) + (f" · {why}" if why else ""), size=13, color=_MUTED, margin="2px 0 0")
+            out.append(block(inner))
+
+    if b["handled"]:
+        out.append(h(f"Already handled ({len(b['handled'])})"))
+        for c in b["handled"]:
+            out.append(block(p(title(c) + f' <span style="color:{_MUTED};font-size:13px">· '
+                               + meta_html(c) + "</span>")))
+
+    out.append(h("Queue"))
+    out.append(p(esc(b["queue_line"])))
+    out.append(h("Last 7 days"))
+    out.append(p(esc(b["week_line"])))
+
+    out.append(f'<div style="margin-top:26px;padding-top:12px;border-top:1px solid {_RULE}">')
+    if b["runs_lines"]:
+        for i, line in enumerate(b["runs_lines"]):
+            out.append(p(("<b>Runs:</b> " if i == 0 else "") + esc(line), size=13, color=_MUTED))
     else:
-        # One stacked cell per item, never a name/meta column pair: `amount` is free text
-        # from the model and can run long ("not specified (five separate RFAs: ...)"), and a
-        # non-wrapping meta column let one such row push the table past the mail viewport
-        # and squeeze every title to one word per line (1 Sep 2026 digest).
-        rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;'
-                    'border-collapse:collapse;width:100%">')
-        for item in queue[:_MAX_QUEUE_ITEMS]:
-            href = _ui_href(item.id)
-            name = esc(item.name or "(untitled)")
-            title = f'<a href="{esc(href)}">{name}</a>' if href else name
-            if item.source_url:
-                title += (f' &nbsp; <a href="{esc(item.source_url)}" '
-                          f'style="color:#666;font-size:12px">source</a>')
-            meta = esc(_item_line(item))
-            rows.append('<tr><td style="padding:6px 0;vertical-align:top;border-bottom:1px solid #eee">'
-                        f'{title}<br><span style="color:#555;font-size:12px">{meta}</span></td></tr>')
-        rows.append('</table>')
-        extra = queued - min(queued, _MAX_QUEUE_ITEMS)
-        if extra > 0:
-            rows.append(f'<p style="font:12px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#666">…and {extra} more</p>')
-
-    rows.append('<h3 style="font:14px/1.3 -apple-system,Helvetica,Arial,sans-serif;margin:16px 0 8px">'
-                f'Runs ({len(runs)})</h3>')
-    if runs:
-        rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;border-collapse:collapse">')
-        for r in runs:
-            lane = esc(_lane(hb.source_for_run_id(r.run_id) or r.run_id))
-            cost = esc(_money(r.cost_usd) if r.cost_usd is not None else "n/a")
-            rows.append(
-                "<tr>"
-                + cell(f"{lane} {esc(r.wire)}/{esc(r.variant)}")
-                + cell(esc(_model_label(r.model)))
-                + cell(esc(r.status))
-                + cell(esc(_run_funnel(r)))
-                + cell(cost)
-                + cell(esc(_duration(r.duration_ms)))
-                + "</tr>"
-            )
-        rows.append('</table>')
-    else:
-        rows.append('<p style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555">No scout_runs row in the window.</p>')
-
-    today_models = [s for s in spend if _int(s.runs_today)]
-    rows.append('<h3 style="font:14px/1.3 -apple-system,Helvetica,Arial,sans-serif;margin:16px 0 8px">'
-                'Models used</h3>')
-    if today_models:
-        rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;border-collapse:collapse">')
-        for s in today_models:
-            rows.append(
-                "<tr>"
-                + cell(esc(_model_label(s.model)))
-                + cell(f"{_int(s.runs_today)} run{'s' if _int(s.runs_today) != 1 else ''}")
-                + cell(esc(_money(s.cost_today)))
-                + "</tr>"
-            )
-        rows.append('</table>')
-    else:
-        rows.append('<p style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555">None recorded.</p>')
-
-    rows.append('<h3 style="font:14px/1.3 -apple-system,Helvetica,Arial,sans-serif;margin:16px 0 8px">'
-                'Consumption <span style="font-weight:normal;color:#666">'
-                '(quota-equivalent — not a bill)</span></h3>')
-    rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;border-collapse:collapse">')
-    rows.append(f'<tr>{cell("Today")}{cell(esc(_money(today_cost)))}'
-                f'{cell(esc(_runs_label(_sum_runs(spend, "runs_today"))))}</tr>')
-    rows.append(f'<tr>{cell("Week (7d)")}{cell(esc(_money(week_cost)))}'
-                f'{cell(esc(_runs_label(_sum_runs(spend, "runs_7d"))))}</tr>')
-    rows.append(f'<tr>{cell("Month (30d)")}{cell(esc(_money(month_cost)))}'
-                f'{cell(esc(_runs_label(_sum_runs(spend, "runs_30d"))))}</tr>')
-    rows.append(f'<tr>{cell(esc(month_name) + " MTD")}{cell(esc(_money(mtd_cost)))}'
-                f'{cell(esc(_runs_label(_sum_runs(spend, "runs_mtd"))))}</tr>')
-    rows.append('</table>')
-    if spend:
-        rows.append('<p style="font:12px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#555;margin:10px 0 4px">By model — week / month / MTD</p>')
-        rows.append('<table style="font:13px/1.4 -apple-system,Helvetica,Arial,sans-serif;border-collapse:collapse">')
-        for s in spend:
-            rows.append(
-                "<tr>"
-                + cell(esc(_model_label(s.model)))
-                + cell(esc(f"{_money(s.cost_7d)} / {_money(s.cost_30d)} / {_money(s.cost_mtd)}"))
-                + cell(esc(f"{_int(s.runs_7d)} / {_int(s.runs_30d)} / {_int(s.runs_mtd)} runs"))
-                + "</tr>"
-            )
-        rows.append('</table>')
-
-    rows.append('<p style="font:12px/1.4 -apple-system,Helvetica,Arial,sans-serif;color:#888;margin-top:16px">'
-                'Exception alerts still fire separately if a lane dies or a wire goes silent.</p>')
-    return "".join(rows)
+        out.append(p("<b>Runs:</b> none in the window.", size=13, color=_MUTED))
+    out.append(p("<b>Quota-equiv</b> (not a bill): " + esc(b["quota_line"]), size=13, color=_MUTED,
+                 margin="4px 0 0"))
+    if b["by_model"]:
+        out.append(p("By model today: " + esc(b["by_model"]), size=13, color=_MUTED, margin="4px 0 0"))
+    if b["na_note"]:
+        out.append(p("n/a = that CLI did not report a $ equivalent (typical for SuperGrok).",
+                     size=12, color=_MUTED, margin="4px 0 0"))
+    out.append(p("Exception alerts still fire separately if a lane dies or a wire goes silent.",
+                 size=12, color=_MUTED, margin="14px 0 0"))
+    out.append("</div></div>")
+    return "".join(out)
 
 
-def build(queue, runs, spend, hours, sources, now=None):
-    return (
-        subject_line(queue, runs, spend, now=now),
-        render_text(queue, runs, spend, hours, sources, now=now),
-        render_html(queue, runs, spend, hours, sources, now=now),
-    )
+def build(queue, runs, spend, backlog, outcomes, hours, sources, now=None):
+    b = brief(queue, runs, spend, backlog, outcomes, hours, sources, now=now)
+    return b["subject"], render_text(b), render_html(b)
 
 
 def main():
@@ -518,12 +699,12 @@ def main():
     hours = digest_hours()
     sources = hb.watch_sources()
     try:
-        queue, runs, spend = fetch(dsn, hours, sources)
+        queue, runs, spend, backlog, outcomes = fetch(dsn, hours, sources)
     except Exception as e:
         print(f"digest: DB query failed: {e}", file=sys.stderr)
         return 2
 
-    subject, text, html_body = build(queue, runs, spend, hours, sources)
+    subject, text, html_body = build(queue, runs, spend, backlog, outcomes, hours, sources)
     rc = notify.send(subject, text, html=html_body, record=False)
     if rc == 0:
         print(f"digest: sent — {subject}")
