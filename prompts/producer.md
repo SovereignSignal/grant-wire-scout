@@ -69,6 +69,12 @@ Two things that count but rank LOW, so do not spend slots on them:
    An X / Twitter / Bluesky / LinkedIn / t.co post is a LEAD, never `source_url`.
    Put the official program/application page in `source_url`; the social URL belongs in `evidence` only.
    A run that emits x.com (or t.co) as `source_url` is a contract miss — the wrapper will reject it.
+   **`source_url` must be the page describing THIS program — never a bare domain root**
+   (`https://floss.fund/`, `https://iliad.ac`) and never a locale-, `/about`- or `/blog`-only
+   path (`https://www.prototypefund.de/en`). Those are front doors: the Wire Room throws them
+   away unread, so the find is lost even though the program is real. It cost 39 finds in the
+   30 days to 2026-09-03. If a homepage is all you have, keep digging for the apply, program,
+   RFP or announcement page and cite that. One find with a deep URL beats two with roots.
 3. **Currency gate (the hardest gate, do not skip it).** Reject anything expired,
    with a past deadline, or showing no sign of 2026 activity. When in doubt, fetch
    the page and check dates explicitly.

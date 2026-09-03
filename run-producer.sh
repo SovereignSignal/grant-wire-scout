@@ -207,6 +207,12 @@ python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.js
 python3 "${PRODUCER_ROOT}/lib/validate.py" "$RUN_DIR/opportunities.json" \
   || echo "[producer] validate failed (non-fatal) — continuing"
 
+# --- URL gate: reject front-door URLs the Wire Room would archive unread (Gate 1 there).
+#     Runs BEFORE verify so we never spend a fetch on a URL that cannot survive intake.
+#     Non-fatal like every other filter: a gate bug must not cost a run its finds. ---
+python3 "${PRODUCER_ROOT}/lib/url_gate.py" "$RUN_DIR/opportunities.json" \
+  || echo "[producer] url gate failed (non-fatal) — continuing"
+
 # --- self-prove: re-fetch each source_url and confirm the claimed facts are on the page ---
 # NON-FATAL: verification is a diagnostic; it must never block delivery of finds (C2).
 echo "[producer] verifying sources…"
@@ -232,6 +238,12 @@ if [[ -n "${WIRE_ROOM_API:-}" && -n "${INTERNAL_API_KEY:-}" ]]; then
   python3 "${PRODUCER_ROOT}/lib/dedup.py" "$RUN_DIR/opportunities.json" "${WIRE}" "${WIRE_ROOM_API}" \
     || echo "[producer] dedup skipped (API error) — full set retained"
 fi
+
+# --- name dedup: the same program at a different URL slips past seen-urls. Drops only names
+#     the operator has already DECIDED on; undecided queue rows are left alone. Best-effort:
+#     no DATABASE_URL means it keeps everything. ---
+python3 "${PRODUCER_ROOT}/lib/name_dedup.py" "$RUN_DIR/opportunities.json" "${WIRE}" \
+  || echo "[producer] name dedup skipped (error) — full set retained"
 
 # --- render the report LAST (M7) so it reflects the DELIVERED set: post-verify stamps AND
 #     post-dedup rejections (it was rendered before dedup, so it showed items that get dropped). ---
