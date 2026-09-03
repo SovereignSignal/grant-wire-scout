@@ -46,7 +46,19 @@ fresher / nichier finds take the slots.
   in 2026** → these are owned by the canonical grants watch; emit one ONLY if a new
   cycle/RFP just opened. ("EF ESP accepts rolling applications" alone is not discovery.)
 - Retroactive-only programs (reward already-delivered work) with no open application → NOISE.
+- **Employment or study dressed up as funding** → NOISE. Job posts, programme-director and
+  research-scientist roles, PhD and postdoc positions, residencies, study-abroad, travel and
+  mobility grants. The operator funds builders; he does not apply for jobs or degrees.
+- **Single-protocol bug bounties** (Immunefi, Sherlock, HackenProof, Code4rena listings for one
+  protocol) → NOISE. Multi-project security funds still count — an audit subsidy or a red-team
+  fund covering many projects is a real find.
 - Anything you cannot ground in a real canonical source URL you have fetched.
+
+Two things that count but rank LOW, so do not spend slots on them:
+- Fellowships count only if they pay the fellow directly and are open to independent builders,
+  not only to enrolled academics. Score them 55 or below unless the round itself is new.
+- A famous standing program with no new cycle. Covered above; repeating it here because it is
+  the single most common way a slot gets wasted.
 
 {{KNOWN_PROGRAMS}}
 ## Method (do this exactly, in order)
