@@ -27,6 +27,7 @@ WIRE=""
 VARIANT="A"
 ENGINE="${SCOUT_ENGINE:-claude}"
 MODEL_FLAG=""
+RENDER_ONLY=0
 PRODUCER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 while [[ $# -gt 0 ]]; do
@@ -35,6 +36,9 @@ while [[ $# -gt 0 ]]; do
     --variant) VARIANT="$2"; shift 2 ;;
     --engine) ENGINE="$2"; shift 2 ;;
     --model) MODEL_FLAG="$2"; shift 2 ;;
+    # Render the prompt and stop, before any model is invoked. Lets bin/test-prompt.sh pin
+    # what the producers are actually told, hermetically and at zero cost.
+    --render-only) RENDER_ONLY=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -52,11 +56,11 @@ fi
 # --- wire definitions + preferred source domains ---
 declare -A WIRE_DEF WIRE_SOURCES WIRE_TARGET
 WIRE_DEF[crypto]="crypto / web3 funding: protocol ecosystem grants (Ethereum, Solana, Stellar, Sui, Aptos, Arbitrum, Starknet, Cardano, Filecoin, Cosmos, etc.), DAO treasury grants, fellowship & bounty programs, crypto-native RFPs. If a protocol/ecosystem fund pays people to write open-source, it is STILL crypto — not oss."
-WIRE_DEF[ai]="AI / ML funding: AI-safety & alignment grants, compute grants, research fellowships, open-source model funding, gov AI RFPs (NSF/NIH/ARPA-E/DARPA), lab programs (Anthropic, OpenAI, Thinking Machines, etc.). An AI-lab research grant is ai — not oss — even when the work is published openly."
+WIRE_DEF[ai]="AI / ML funding: AI-safety & alignment grants and RFPs (Coefficient Giving, FAS, Manifund, GovAI, Apart Research, Iliad, Longview), compute and open-model funds (NAIRR, Nebius, Swiss AI Initiative, EuroHPC access calls), foundation & corporate AI programs (Schmidt Sciences, GitLab Foundation, Renaissance Philanthropy, Stanford HAI, UKRI EPSRC), lab programs (Anthropic, OpenAI, DeepMind), and accelerators or research cohorts with real money attached. US federal AI research calls (NSF, DARPA, IARPA) count when the program or track is genuinely new; score them 60 or below otherwise, since routine rounds are re-found far more often than they are approved. REJECT outright: EU framework-programme calls and procurement tenders (Horizon Europe, Digital Europe, EU Chips JU, EuroHPC Gigafactories) and ERC grants (ADG / PoC / Plus / Starting) — general academic research open to any field, zero approvals in 11 attempts. Compute-ACCESS calls (e.g. EuroHPC AI for Science) still count. An AI-lab research grant is ai — not oss — even when the work is published openly."
 WIRE_DEF[oss]="open-source *funder* programs for maintainers and public-goods software: NLnet, Sovereign Tech Fund, Alpha-Omega, FOSS United / FOSS responders, GitHub Secure Open Source Fund, OpenSSF, Linux Foundation, SustainOSS, Software Sustainability Institute. NOT protocol ecosystem grants (those are crypto) and NOT AI-lab/safety grants (those are ai)."
 
 WIRE_SOURCES[crypto]="forum.zcashcommunity.com, solana.foundation/grants, cardano.ideascale.com, ethereum.org, filecoin.io/grants, cosmos.network, gov.foundation, dao treasury pages, gitcoin.co"
-WIRE_SOURCES[ai]="safety.anthropic.com, openai.com/security, nsf.gov, grants.gov, ariacc.org, longresist.org, gov.uk AI grant pages, ai-safety-focused foundations, FAR.AI, Apollo Research"
+WIRE_SOURCES[ai]="coefficientgiving.org, manifund.org, governance.ai, apartresearch.com, fas.org, longview.org, hai.stanford.edu, renaissancephilanthropy.org, ukri.org, anthropic.com, openai.com, deepmind.google, simpler.grants.gov, nsf.gov, darpa.mil"
 WIRE_SOURCES[oss]="nlnet.nl, sovereigntechfund.de, alpha-omega.dev, fossresponders.com, opencollective.com, github.com/funding, openssf.org, linuxfoundation.org"
 
 WIRE_TARGET[crypto]="5-8"
@@ -104,28 +108,25 @@ mkdir -p "$RUN_DIR"
 echo "RUN_DIR=$RUN_DIR"
 
 # --- render prompt ---
+# Every substitution goes through python str.replace, never sed. In a sed replacement an
+# unescaped `&` expands to the WHOLE MATCH, so `fellowship & bounty programs` rendered as
+# `fellowship {{WIRE_DEFINITION}} bounty programs` — the crypto and ai wire definitions had
+# been shipping corrupted to both producers. Values are passed through the environment so
+# quotes, slashes, ampersands and newlines are all literal.
 PROMPT_FILE="$RUN_DIR/prompt.txt"
-# DISCOVERY_METHOD contains slashes/quotes; splice it via python after the rest.
-sed \
-  -e "s|{{PRODUCER_LABEL}}|${PRODUCER_LABEL}|g" \
-  -e "s|{{PRODUCER}}|${PRODUCER}|g" \
-  -e "s|{{WIRE}}|${WIRE}|g" \
-  -e "s|{{WIRE_DEFINITION}}|${WIRE_DEF[$WIRE]}|" \
-  -e "s|{{VARIANT}}|${VARIANT}|g" \
-  -e "s|{{VARIANT_RULES}}|${VARIANT_RULES}|" \
-  -e "s|{{SOURCE_DOMAINS}}|${WIRE_SOURCES[$WIRE]}|g" \
-  -e "s|{{TARGET_COUNT}}|${TARGET_COUNT}|g" \
-  -e "s|{{TODAY}}|${TODAY}|g" \
-  -e "s|{{TODAY_TS}}|${TODAY_TS}|" \
-  -e "s|{{RUN_ID}}|${RUN_ID}|g" \
-  -e "s|{{DISCOVERED_VIA}}|${DISCOVERED_VIA}|g" \
-  "${PRODUCER_ROOT}/prompts/producer.md" > "$PROMPT_FILE"
-
-python3 - "$PROMPT_FILE" "$DISCOVERY_METHOD" <<'PY'
-import sys
-path, method = sys.argv[1], sys.argv[2]
-text = open(path).read().replace("{{DISCOVERY_METHOD}}", method)
-open(path, "w").write(text)
+SUB_PRODUCER_LABEL="$PRODUCER_LABEL" SUB_PRODUCER="$PRODUCER" SUB_WIRE="$WIRE" \
+SUB_WIRE_DEFINITION="${WIRE_DEF[$WIRE]}" SUB_VARIANT="$VARIANT" SUB_VARIANT_RULES="$VARIANT_RULES" \
+SUB_SOURCE_DOMAINS="${WIRE_SOURCES[$WIRE]}" SUB_TARGET_COUNT="$TARGET_COUNT" \
+SUB_TODAY="$TODAY" SUB_TODAY_TS="$TODAY_TS" SUB_RUN_ID="$RUN_ID" \
+SUB_DISCOVERED_VIA="$DISCOVERED_VIA" SUB_DISCOVERY_METHOD="$DISCOVERY_METHOD" \
+python3 - "${PRODUCER_ROOT}/prompts/producer.md" "$PROMPT_FILE" <<'PY'
+import os, sys
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src).read()
+for key, value in os.environ.items():
+    if key.startswith("SUB_"):
+        text = text.replace("{{%s}}" % key[4:], value)
+open(dst, "w").write(text)
 PY
 
 # --- prime with the already-catalogued set so the producer hunts NEW, not re-finds.
@@ -150,6 +151,11 @@ echo "[producer] primed with ${KNOWN_N} already-known ${WIRE} programs"
 
 echo "[producer] engine=${ENGINE} wire=${WIRE} variant=${VARIANT} model=${MODEL} run=${RUN_ID}"
 echo "[producer] -> $RUN_DIR"
+
+if [[ "$RENDER_ONLY" == "1" ]]; then
+  echo "[producer] --render-only: prompt written, no model invoked"
+  exit 0
+fi
 
 # --- portable wall-clock cap on the producer. This is a SAFETY NET for a genuinely hung
 #     claude/grok -p, NOT the normal work limiter: real work is bounded by --max-turns and cost is

@@ -20,6 +20,8 @@ jobs:
           python3 -m py_compile lib/*.py
           bash -n run-producer.sh
           bash -n bin/*.sh
+      - name: test-prompt
+        run: bin/test-prompt.sh
       - name: test-e2e
         run: bin/test-e2e.sh
       - name: test-heartbeat
