@@ -172,6 +172,54 @@ sys.exit(1 if fails else 0)
 PY
 [ $? -eq 0 ] && ok "collapse_runs() folds every run in the window" || bad "collapse_runs() folds every run in the window"
 
+echo "== A2b. collapse_lane(): one-wire timeout/other does not kill a live lane =="
+# 2026-09-05 14:00: Claude crypto+ai ok, oss rc=124 recorded as other. Worst-status
+# collapse paged LANE: Claude (lane-other) even though the lane had just delivered.
+python3 - "$ROOT" <<'PY'
+import sys, os
+sys.path.insert(0, os.path.join(sys.argv[1], "lib"))
+import heartbeat as hb
+cases = [
+    ("ok + other -> alive (the 2026-09-05 mail)",
+     [("ok", 3), ("ok", 4), ("other", 0)], ("ok", 7)),
+    ("ok + timeout -> alive",
+     [("ok", 2), ("timeout", 0)], ("ok", 2)),
+    ("skipped + empty -> alive",
+     [("skipped", 0), ("empty", 0)], ("skipped", 0)),
+    ("AUTH still wins over ok",
+     [("ok", 3), ("auth", 0)], ("auth", 3)),
+    ("QUOTA still wins over ok",
+     [("ok", 1), ("quota", 0)], ("quota", 1)),
+    ("only other -> other (lane really failed)",
+     [("other", 0)], ("other", 0)),
+    ("only timeout -> timeout",
+     [("timeout", 0)], ("timeout", 0)),
+]
+fails = 0
+for label, rows, want in cases:
+    got = hb.collapse_lane(rows)
+    if got != want:
+        print(f"  FAIL: {label}: got={got!r} want={want!r}", file=sys.stderr); fails += 1
+    else:
+        print(f"  ok: {label}")
+if hb.collapse_lane([]) is not None:
+    print("  FAIL: no rows must collapse to None", file=sys.stderr); fails += 1
+else:
+    print("  ok: no rows -> None")
+d = hb.diagnose_lane("claude-code", hb.collapse_lane([("ok", 3), ("other", 0)]))
+if d.silent:
+    print(f"  FAIL: ok+other must not page the lane: {d}", file=sys.stderr); fails += 1
+else:
+    print("  ok: diagnose_lane ok+other is alive")
+d = hb.diagnose_lane("claude-code", hb.collapse_lane([("other", 0)]))
+if not d.silent or d.cause != "lane-other":
+    print(f"  FAIL: other-only should page lane-other: {d}", file=sys.stderr); fails += 1
+else:
+    print("  ok: diagnose_lane other-only still pages")
+sys.exit(1 if fails else 0)
+PY
+[ $? -eq 0 ] && ok "collapse_lane() keeps a live lane alive" || bad "collapse_lane() keeps a live lane alive"
+
 echo "== A3. trend context: is this zero normal for this wire? =="
 # Rows are (wire, day, daily_total) — day-ordered history, because "how many zeros" is not
 # enough: WHERE they sit matters. 2026-08-11 proved it — ai's second consecutive zero day was
@@ -348,6 +396,21 @@ rc="$(run_hb '{"counts":[["crypto",3],["ai",4]],"runs":[["oss","ok",0,6]],"funne
 grep -qi "saturation\|already in the catalog" <<<"$(alert_body)" \
   && ok "end-to-end saturation copy when found_count=6" \
   || bad "saturation e2e copy: $(alert_body)"
+
+echo "== B11. 2026-09-05 LANE: Claude (lane-other) — one oss timeout, lane still live =="
+# crypto=5 ai=8 oss=2. Claude crypto+ai ok, oss other (the rc=124). Grok fed oss.
+# Must NOT page LANE. The per-run TIMEOUT mail already fired; the lane is not dead.
+rc="$(run_hb '{"counts":[["crypto",5],["ai",8],["oss",2]],"runs":[["crypto","ok",3],["ai","ok",4],["oss","ok",2]],"lanes":[["claude-code-crypto","ok",3],["claude-code-ai","ok",4],["claude-code-oss","other",0],["grok-build-oss","ok",2]]}')"
+[ "$rc" = "0" ] && ok "ok+other lane -> rc=0" || bad "ok+other lane -> rc=$rc (want 0)"
+[ -z "$(alert_body)" ] && ok "ok+other lane sends no LANE alert" \
+                       || bad "ok+other lane still paged: $(alert_body)"
+
+# AUTH on the same Claude tick still pages — token is lane-wide.
+rc="$(run_hb '{"counts":[["crypto",5],["ai",8],["oss",2]],"runs":[["oss","auth",0]],"lanes":[["claude-code-crypto","ok",3],["claude-code-oss","auth",0],["grok-build-oss","ok",2]]}')"
+body="$(alert_body)"
+grep -qi "LANE" <<<"$body" && ok "AUTH + ok still pages LANE" || bad "AUTH + ok lost LANE: $body"
+grep -qi "AUTH\|setup-token" <<<"$body" && ok "AUTH + ok still names AUTH" \
+                                        || bad "AUTH + ok lost AUTH copy: $body"
 
 echo "== C. multi-variant windows (SCOUT_VARIANTS='A B') =="
 
