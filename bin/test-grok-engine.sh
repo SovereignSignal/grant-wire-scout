@@ -123,6 +123,10 @@ check("empty grok envelope -> EMPTY",
 check("grok 429 in text -> QUOTA",
       write("q.json", {"text": "HTTP 429 rate limit", "is_error": True}),
       "QUOTA")
+check("cli timed-out envelope -> TIMEOUT",
+      write("t.json", {"text": "", "stopReason": "Error", "is_error": True,
+                       "error": "command timed out"}),
+      "TIMEOUT")
 sys.exit(1 if fails else 0)
 PY
 [ $? -eq 0 ] && ok "classify_failure grok signals" || bad "classify_failure grok signals"

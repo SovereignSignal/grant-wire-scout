@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """classify_failure.py — read a run's raw.json and classify a failure for alerting.
 
-Prints exactly one token: AUTH | QUOTA | EMPTY | OTHER. Best-effort and conservative —
-defaults to OTHER. Used by run-scout.sh to pick the right alert subject so an expired
-OAuth token reads as 'AUTH', not a generic failure.
+Prints exactly one token: AUTH | QUOTA | EMPTY | TIMEOUT | OTHER. Best-effort and
+conservative — defaults to OTHER. Used by run-scout.sh to pick the right alert
+subject so an expired OAuth token reads as 'AUTH', not a generic failure.
+
+TIMEOUT is normally decided by the wrapper from rc=124 (raw.json is often empty
+or truncated after a kill). This classifier still returns TIMEOUT when the
+envelope itself says the run was killed / timed out.
 
 Usage: classify_failure.py <raw.json>
 """
@@ -42,6 +46,10 @@ def classify(raw_path):
         "xai_api_key", "not authenticated", "unauthenticated", "device-auth",
     )):
         return "AUTH"
+    # Wall-clock / interrupt signals from the CLI envelope (not the wrapper's rc=124 —
+    # run-scout.sh classifies that before calling us, because raw.json is often empty).
+    if any(s in blob for s in ("timed out", "command timed out", "wall-clock", "killed by signal")):
+        return "TIMEOUT"
     if d.get("is_error"):
         return "OTHER"
     # exited non-zero but no error envelope and nothing usable produced → empty/parse failure

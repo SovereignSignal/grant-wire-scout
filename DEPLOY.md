@@ -77,7 +77,7 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
 ## Operating
 - **Cadence:** Claude Sun/Tue/Thu/Sat 04:00 UTC; Grok Mon/Wed/Fri 06:00 UTC. Heartbeat
   runs daily at 14:00 UTC against **both** scout sources (`SCOUT_SILENCE_HOURS=60`).
-- **Alerts are exception-only** (`AUTH` / `QUOTA` / `EMPTY` / `DELIVERY` / `FAILED`), plus the
+- **Alerts are exception-only** (`AUTH` / `QUOTA` / `EMPTY` / `TIMEOUT` / `DELIVERY` / `FAILED`), plus the
   heartbeat when a wire is silent across both lanes. The heartbeat also sends a **daily
   digest** at 14:00 UTC: what landed in the queue, which models ran, and quota-equivalent
   spend for today / the last 7 days / the last 30 days / calendar MTD. That mail is

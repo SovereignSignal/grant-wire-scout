@@ -7,12 +7,13 @@
 #
 # Coverage:
 #   A happy path        -> delivered to Wire Room, NO alert, rc=0
-#   B timeout (rc=124)  -> "FAILED (…rc=124)" alert            (the 2026-06-30 outage class)
+#   B timeout, nothing flushed -> "TIMEOUT" alert + rc=124     (unrecoverable kill)
 #   C auth              -> "AUTH" alert
 #   D quota             -> "QUOTA" alert
 #   E empty output      -> "EMPTY" alert
 #   F malformed JSON    -> "FAILED" alert (extract parse failure)
 #   G delivery HTTP 500 -> "DELIVERY" alert, nonzero exit
+#   H timeout after flush -> delivered, NO alert, rc=0         (salvage)
 #
 # Alerts are captured via notify.py's webhook fallback (NOTIFY_WEBHOOK_URL) pointed at the
 # mock — no prod code change. Wire Room submit/seen-urls are mocked. DATABASE_URL is unset so
@@ -79,18 +80,24 @@ cat > "$TMP/bin/claude" <<'PY'
 import os, sys, time, json
 mode = os.environ.get("CLAUDE_STUB_MODE", "ok")
 base = os.environ.get("MOCK_BASE", "http://127.0.0.1")
-if mode == "slow":
-    time.sleep(int(os.environ.get("STUB_SLEEP", "5")))
 def out(result, is_error=False, **x):
     d = {"result": result, "total_cost_usd": 0.01, "duration_ms": 100, "is_error": is_error}
-    d.update(x); sys.stdout.write(json.dumps(d))
-if mode in ("ok", "slow"):
-    p = {"producer": "claude-code", "variant": "A", "wire": "crypto", "run_id": "e2e",
+    d.update(x); sys.stdout.write(json.dumps(d)); sys.stdout.flush()
+def payload():
+    return {"producer": "claude-code", "variant": "A", "wire": "crypto", "run_id": "e2e",
          "generated_at": "2026-07-01T00:00:00Z", "rejected": [],
          "opportunities": [{"name": "E2E Test Grant", "source_url": base + "/g1", "wire": "crypto",
              "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "classification": "GRANT",
              "fit_score": 80, "fit_reason": "test", "evidence": [base + "/g1"], "discovered_via": "web_search"}]}
-    out(json.dumps(p)); sys.exit(0)
+if mode == "slow":
+    time.sleep(int(os.environ.get("STUB_SLEEP", "5")))
+    out(json.dumps(payload())); sys.exit(0)
+if mode == "flush-then-slow":
+    out(json.dumps(payload()))
+    time.sleep(int(os.environ.get("STUB_SLEEP", "5")))
+    sys.exit(0)
+if mode == "ok":
+    out(json.dumps(payload())); sys.exit(0)
 if mode == "auth":  out("Error 401 unauthorized: oauth token invalid", is_error=True, subtype="error", api_error_status="401"); sys.exit(1)
 if mode == "quota": out("HTTP 429 rate limit: usage limit reached", is_error=True, subtype="error", api_error_status="429"); sys.exit(1)
 if mode == "empty": out(""); sys.exit(0)
@@ -151,10 +158,12 @@ run_case ok
 [ -s "$CAP/submit.json" ] && ok "delivered to Wire Room" || bad "no submit captured"
 [ -z "$(alerts)" ] && ok "no alert fired" || bad "unexpected alert: $(alerts)"
 
-echo "== B timeout -> rc=124 + FAILED alert =="
+echo "== B timeout, nothing flushed -> rc=124 + TIMEOUT alert =="
 run_case slow SCOUT_PRODUCER_TIMEOUT=2 STUB_SLEEP=5
 [ "$CASE_RC" -eq 124 ] && ok "rc=124" || bad "timeout rc=$CASE_RC"
-alerts | grep -q "rc=124" && ok "alert mentions rc=124" || bad "alert not rc=124: $(alerts)"
+alerts | grep -q "TIMEOUT" && ok "alert: TIMEOUT" || bad "alert not TIMEOUT: $(alerts)"
+[ -z "$(cat "$CAP/submit.json" 2>/dev/null)" ] && ok "unrecoverable timeout did not submit" \
+  || bad "unrecoverable timeout still submitted"
 
 echo "== C auth -> AUTH alert =="
 run_case auth
@@ -176,6 +185,12 @@ echo "== G delivery HTTP 500 -> DELIVERY alert + nonzero =="
 : > "$CAP/force_500"; run_case ok; rm -f "$CAP/force_500"
 [ "$CASE_RC" -ne 0 ] && ok "rc nonzero ($CASE_RC)" || bad "delivery-fail rc=0"
 alerts | grep -qi "DELIVERY" && ok "alert: DELIVERY" || bad "alert not DELIVERY: $(alerts)"
+
+echo "== H timeout after flush -> salvage + deliver + no alert =="
+run_case flush-then-slow SCOUT_PRODUCER_TIMEOUT=2 STUB_SLEEP=5
+[ "$CASE_RC" -eq 0 ] && ok "salvage rc=0" || { printf '%s\n' "$CASE_OUT" | tail -20; bad "salvage rc=$CASE_RC"; }
+[ -s "$CAP/submit.json" ] && ok "salvaged find delivered" || bad "salvage did not submit"
+[ -z "$(alerts)" ] && ok "no TIMEOUT alert after salvage" || bad "salvage still alerted: $(alerts)"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"

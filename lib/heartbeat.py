@@ -265,6 +265,10 @@ def diagnose_wire(wire, count, run, trend=None):
     if status == "quota":
         return Diagnosis(wire, True, "quota",
                          "a run hit the Max / SuperGrok usage cap (QUOTA) and produced nothing.")
+    if status == "timeout":
+        return Diagnosis(wire, True, "timeout",
+                         "a run hit the producer wall-clock cap (TIMEOUT) and nothing usable "
+                         "was salvaged. The hunt ran past SCOUT_PRODUCER_TIMEOUT.")
     if status == "skipped":
         return Diagnosis(wire, True, "zero-yield",
                          "the scout skipped this wire (the other lane had just fed it) and "
@@ -327,6 +331,10 @@ def diagnose_lane(source, run):
     if status == "quota":
         return Diagnosis(source, True, "lane-quota",
                          f"{label} hit the Max / SuperGrok usage cap (QUOTA).")
+    if status == "timeout":
+        return Diagnosis(source, True, "lane-timeout",
+                         f"{label} hit the producer wall-clock cap (TIMEOUT) and nothing "
+                         "usable was salvaged.")
     return Diagnosis(source, True, f"lane-{status or 'unknown'}",
                      f"{label} failed with status '{status or 'unknown'}'. "
                      "See that service's logs and its scout_runs rows.")
