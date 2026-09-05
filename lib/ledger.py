@@ -14,7 +14,7 @@ Best-effort by design: a ledger failure must NEVER break the run. Callers invoke
 `|| true` and it returns 0 even on DB errors.
 
 Usage: ledger.py <run_dir> <status> [error_class]
-  status: ok | auth | quota | empty | delivery | failed
+  status: ok | auth | quota | empty | timeout | delivery | failed
 Env: DATABASE_URL (the Wire Room Postgres)
 """
 import json

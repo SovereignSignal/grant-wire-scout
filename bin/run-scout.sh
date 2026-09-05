@@ -74,12 +74,19 @@ if [ -z "$run_dir" ]; then
 fi
 
 if [ "$rc" -ne 0 ]; then
-  cls="$(python3 "$ROOT/lib/classify_failure.py" "$run_dir/raw.json" 2>/dev/null || echo OTHER)"
+  # rc=124 is GNU timeout — classify BEFORE reading raw.json, which is often empty or
+  # truncated and would otherwise land as OTHER/FAILED.
+  if [ "$rc" -eq 124 ]; then
+    cls=TIMEOUT
+  else
+    cls="$(python3 "$ROOT/lib/classify_failure.py" "$run_dir/raw.json" 2>/dev/null || echo OTHER)"
+  fi
   case "$cls" in
-    AUTH)  subj="⚠️ Grant Wire Scout AUTH — ${LANE} credentials rejected ($WIRE/$VARIANT); $AUTH_HINT" ;;
-    QUOTA) subj="⚠️ Grant Wire Scout QUOTA — ${LANE} usage cap hit ($WIRE/$VARIANT)" ;;
-    EMPTY) subj="⚠️ Grant Wire Scout EMPTY — ${LANE} produced no usable output ($WIRE/$VARIANT)" ;;
-    *)     subj="⚠️ Grant Wire Scout FAILED ($LANE $WIRE/$VARIANT, rc=$rc)" ;;
+    AUTH)    subj="⚠️ Grant Wire Scout AUTH — ${LANE} credentials rejected ($WIRE/$VARIANT); $AUTH_HINT" ;;
+    QUOTA)   subj="⚠️ Grant Wire Scout QUOTA — ${LANE} usage cap hit ($WIRE/$VARIANT)" ;;
+    EMPTY)   subj="⚠️ Grant Wire Scout EMPTY — ${LANE} produced no usable output ($WIRE/$VARIANT)" ;;
+    TIMEOUT) subj="⚠️ Grant Wire Scout TIMEOUT — ${LANE} hit the wall-clock cap ($WIRE/$VARIANT)" ;;
+    *)       subj="⚠️ Grant Wire Scout FAILED ($LANE $WIRE/$VARIANT, rc=$rc)" ;;
   esac
   printf '%s\n' "$out" | tail -25 | alert "$subj"
   ledger "$(printf '%s' "$cls" | tr 'A-Z' 'a-z')" "$cls"

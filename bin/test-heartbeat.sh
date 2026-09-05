@@ -119,6 +119,7 @@ cases = [
     ("no ledger row at all -> the cron never ran",        0, None,                    "no-run"),
     ("run failed AUTH -> token rejected",                 0, ("auth", 0),             "auth"),
     ("run failed QUOTA -> usage cap",                     0, ("quota", 0),            "quota"),
+    ("run hit wall-clock cap -> timeout",                 0, ("timeout", 0),          "timeout"),
     ("clean run, 0 opportunities -> zero-yield",          0, ("ok", 0),               "zero-yield"),
     ("clean run delivered 3 but 0 landed -> lost",        0, ("ok", 3),               "lost-in-delivery"),
 ]

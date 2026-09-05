@@ -249,7 +249,12 @@ def salvage_payload(result_text: str) -> dict:
 
 
 def main(raw_path: str, out_json: str) -> int:
-    raw_text = Path(raw_path).read_text()
+    try:
+        raw_text = Path(raw_path).read_text()
+    except FileNotFoundError:
+        raise SystemExit(f"raw file missing: {raw_path}")
+    if not raw_text.strip():
+        raise SystemExit(f"raw file empty: {raw_path}")
     try:
         raw = json.loads(raw_text)
     except json.JSONDecodeError:

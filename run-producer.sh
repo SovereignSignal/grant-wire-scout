@@ -160,18 +160,21 @@ fi
 # --- portable wall-clock cap on the producer. This is a SAFETY NET for a genuinely hung
 #     claude/grok -p, NOT the normal work limiter: real work is bounded by --max-turns and cost is
 #     turn/token-driven, not wall-clock-driven, so a higher cap costs nothing extra — it just
-#     lets the paid-for turn budget finish. The old 600s cap was under-provisioned: runs had
-#     already crept to ~535s pre-priming, and the 2026-06-29 known-catalog priming (which makes
-#     the producer hunt for NEW programs beyond the known set) pushed the first cron run past
-#     600s, so `timeout` killed it mid-flight (rc=124), discarding all work and firing an alert.
-#     1200s gives the turn budget room to complete; override with SCOUT_PRODUCER_TIMEOUT. ---
-PRODUCER_TIMEOUT="${SCOUT_PRODUCER_TIMEOUT:-1200}"
+#     lets the paid-for turn budget finish.
+#     History: 600s was under-provisioned once known-catalog priming landed (2026-06-30,
+#     rc=124, work discarded). 1200s held until OSS primed with the full 400-name cap
+#     (2026-09-05 Claude oss/A). 2400s is the new default; override with SCOUT_PRODUCER_TIMEOUT.
+#     A timeout no longer aborts the pipeline: we salvage whatever JSON already landed in
+#     raw.json and keep going when extract recovers opportunities. ---
+PRODUCER_TIMEOUT="${SCOUT_PRODUCER_TIMEOUT:-2400}"
 if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout "$PRODUCER_TIMEOUT")
 elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT=(gtimeout "$PRODUCER_TIMEOUT")
 else TIMEOUT=(); echo "[producer] note: no timeout binary — running uncapped" >&2; fi
 
 RAW_JSON="$RUN_DIR/raw.json"
 
+# Isolate the model invoke so a 124 does not trip `set -e` and skip extract/salvage.
+producer_rc=0
 if [[ "$ENGINE" == "grok" ]]; then
   python3 "${PRODUCER_ROOT}/lib/hydrate_grok_auth.py"
   GROK_BIN="${GROK:-grok}"
@@ -190,7 +193,7 @@ if [[ "$ENGINE" == "grok" ]]; then
     GROK_ARGS+=(--sandbox "$GROK_SANDBOX")
   fi
   "${TIMEOUT[@]}" "$GROK_BIN" "${GROK_ARGS[@]}" \
-    > "$RAW_JSON"
+    > "$RAW_JSON" || producer_rc=$?
 else
   CLAUDE="${CLAUDE:-claude}"
   "${TIMEOUT[@]}" "$CLAUDE" -p "$(cat "$PROMPT_FILE")" \
@@ -199,11 +202,52 @@ else
     --permission-mode acceptEdits \
     --allowedTools "WebSearch" "WebFetch" \
     --max-turns "${SCOUT_MAX_TURNS:-100}" \
-    > "$RAW_JSON"
+    > "$RAW_JSON" || producer_rc=$?
+fi
+
+if [[ "$producer_rc" -eq 124 ]]; then
+  echo "[producer] TIMEOUT after ${PRODUCER_TIMEOUT}s — salvaging whatever landed in raw.json" >&2
+elif [[ "$producer_rc" -ne 0 ]]; then
+  echo "[producer] model exited rc=${producer_rc}" >&2
 fi
 
 # --- extract the producer payload (the model's `result` text holds our JSON object) ---
-python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.json"
+# extract.py already salvages truncated / mid-array JSON. Run it even after a timeout so a
+# killed claude that flushed a partial envelope does not discard paid-for finds.
+extract_rc=0
+python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.json" \
+  || extract_rc=$?
+if [[ "$extract_rc" -ne 0 ]]; then
+  if [[ "$producer_rc" -eq 124 ]]; then
+    echo "[producer] TIMEOUT: nothing recoverable from raw.json — giving up" >&2
+    exit 124
+  fi
+  exit "$extract_rc"
+fi
+
+if [[ "$producer_rc" -eq 124 ]]; then
+  salvaged_n="$(python3 - "$RUN_DIR/opportunities.json" <<'PY'
+import json, sys
+try:
+    print(len(json.load(open(sys.argv[1])).get("opportunities") or []))
+except Exception:
+    print(0)
+PY
+)"
+  if [[ "${salvaged_n:-0}" -gt 0 ]]; then
+    echo "[producer] TIMEOUT: salvaged ${salvaged_n} opportunities — continuing the pipeline" >&2
+    producer_rc=0
+    export SCOUT_TIMED_OUT=1
+  else
+    echo "[producer] TIMEOUT: extract ran but recovered 0 opportunities — giving up" >&2
+    exit 124
+  fi
+elif [[ "$producer_rc" -ne 0 ]]; then
+  # Model failed (AUTH/QUOTA/crash) but extract still produced a payload — keep going so a
+  # partial envelope is not thrown away. The scout wrapper classifies from raw.json.
+  echo "[producer] model rc=${producer_rc} but extract recovered a payload — continuing" >&2
+  producer_rc=0
+fi
 python3 "${PRODUCER_ROOT}/lib/validate.py" "$RUN_DIR/opportunities.json" \
   || echo "[producer] validate failed (non-fatal) — continuing"
 
@@ -275,6 +319,7 @@ print(json.dumps({
   "dedup_dropped": funnel.get("dedup_dropped", 0),
   "cost_usd": raw.get("total_cost_usd"),
   "duration_ms": raw.get("duration_ms") or raw.get("durationMs"),
+  "timed_out": os.environ.get("SCOUT_TIMED_OUT") == "1",
 }, indent=2))
 PY
 
