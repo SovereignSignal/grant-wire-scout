@@ -110,4 +110,7 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
   `grant-wire-grok`. Do not flip first — WRO will reject the batch.
 - **Lane-dead mail:** heartbeat still does not SILENT a wire the other lane fed, but
   it will page `LANE: Claude` (or Grok) if that producer wrote no ok/skipped ledger
-  row, or failed AUTH/QUOTA, in the window.
+  row, or failed AUTH/QUOTA, in the window. A timeout / `other` / empty on one
+  wire does not mark the whole lane dead when another wire on that producer
+  already ran ok — that was the 2026-09-05 `LANE: Claude (lane-other)` mail
+  after oss hit rc=124 while crypto+ai succeeded.

@@ -26,7 +26,11 @@ lookback also misses Wednesday's Grok tick (56h). 60h covers both.
 
 A wire with rows is never SILENT. A producer lane can still be dead: diagnose_lane()
 pages if Claude (or Grok) has no ok/skipped ledger row, or failed AUTH/QUOTA, even
-when the other lane already fed the queue.
+when the other lane already fed the queue. A single-wire timeout / other / empty
+does not mark the whole lane dead when another wire on that producer already
+ran ok — that is the 2026-09-05 heartbeat: Claude crypto+ai succeeded, oss
+timed out as status=other, and worst-status collapse paged LANE: Claude
+(lane-other) for the rest of the 60h window. AUTH/QUOTA still win (lane-wide).
 
 By default this watches BOTH scout lanes (claude-code + grok-scout). After Grok existed,
 "SILENT: oss" no longer meant the oss wire was empty — 2026-08-27 Claude oss was a
@@ -119,6 +123,10 @@ Trend = namedtuple("Trend", "median days zeros streak")
 # actionable than a clean one, and auth (needs a token rotation) outranks everything.
 # skipped = the lane ran and chose not to burn quota (SCOUT_SKIP_IF_FED_HOURS) — alive.
 _SEVERITY = {"ok": 0, "skipped": 0, "auth": 3, "quota": 2}
+# Per-tick misses that are not lane-wide. collapse_lane() ignores these when the
+# same producer also wrote an ok/skipped row in the window.
+_LANE_ALIVE = frozenset(("ok", "skipped"))
+_LANE_TICK_MISS = frozenset(("timeout", "other", "empty", "failed", "delivery"))
 
 _LANE_LABEL = {
     "claude-code": "Claude",
@@ -151,6 +159,31 @@ def collapse_runs(rows):
     if any(len(r) >= 3 and r[2] is not None for r in rows):
         found = sum((r[2] or 0) for r in rows if len(r) >= 3)
         return status, opps, found
+    return status, opps
+
+
+def collapse_lane(rows):
+    """Fold one producer's ticks across every wire it ran in the window.
+
+    AUTH/QUOTA still win — those are lane-wide (shared token / shared cap).
+    A timeout, empty, delivery miss, or generic `other` on one wire does not
+    page the whole lane when another wire already ran ok/skipped. That was the
+    2026-09-05 LANE: Claude (lane-other) mail: crypto+ai ok, oss rc=124
+    recorded as status=other, worst-status collapse called Claude dead.
+    """
+    rows = list(rows)
+    if not rows:
+        return None
+    statuses = [(r[0] or "").strip().lower() for r in rows]
+    opps = sum((r[1] or 0) for r in rows)
+    if any(s == "auth" for s in statuses):
+        status = "auth"
+    elif any(s == "quota" for s in statuses):
+        status = "quota"
+    elif any(s in _LANE_ALIVE for s in statuses):
+        status = "ok" if "ok" in statuses else "skipped"
+    else:
+        status = max(statuses, key=_severity)
     return status, opps
 
 
@@ -313,7 +346,8 @@ def diagnose_lane(source, run):
     `run` is None (no ledger row for this prefix) or a collapse_runs() tuple.
     A skip-if-fed tick is alive. AUTH/QUOTA/no-run still page — that is the
     2026-08-27 hole: Claude AUTH on oss was invisible because Grok had just
-    landed five oss rows.
+    landed five oss rows. A timeout/other on one wire next to an ok tick
+    is alive — collapse_lane() already folded that to ok.
     """
     label = _LANE_LABEL.get(source, source)
     if run is None:
@@ -335,6 +369,12 @@ def diagnose_lane(source, run):
         return Diagnosis(source, True, "lane-timeout",
                          f"{label} hit the producer wall-clock cap (TIMEOUT) and nothing "
                          "usable was salvaged.")
+    if status in _LANE_TICK_MISS:
+        return Diagnosis(source, True, f"lane-{status}",
+                         f"{label} wrote no successful tick in the window "
+                         f"(status='{status}'). Often a wall-clock kill recorded as "
+                         f"'other' before TIMEOUT was a ledger class. See that "
+                         f"service's logs and its scout_runs rows.")
     return Diagnosis(source, True, f"lane-{status or 'unknown'}",
                      f"{label} failed with status '{status or 'unknown'}'. "
                      "See that service's logs and its scout_runs rows.")
@@ -422,7 +462,7 @@ def _fetch(dsn, hours, wires):
                     src = source_for_run_id(run_id)
                     if src:
                         by_src.setdefault(src, []).append((s, n))
-                lanes = {src: collapse_runs(by_src.get(src) or []) for src in sources}
+                lanes = {src: collapse_lane(by_src.get(src) or []) for src in sources}
     finally:
         conn.close()
     return counts, runs, trends, lanes
