@@ -6,8 +6,9 @@
 The model is instructed to return ONLY a JSON object. We:
   1. Read the envelope, take the result text (Claude `.result`, Grok `.text`, …).
   2. Strip any stray markdown fences / leading prose defensively.
-  3. json.loads it, validate the top-level shape.
-  4. Write opportunities.json (the payload).
+  3. json.loads it, keep any recoverable opportunities.
+  4. Stamp producer/variant/wire/run_id from the wrapper when the model omits them.
+  5. Write opportunities.json (the payload).
 
 RESILIENCE (C1): a single truncated/malformed token must NOT lose an entire run's
 finds. If the whole-payload parse fails (output-token ceiling hit mid-array, a
@@ -22,13 +23,18 @@ Report rendering lives in report.py (re-runnable after verify.py stamps fields).
 Usage: extract.py <raw.json> <out-opportunities.json>
 """
 import json
+import os
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 
-# Required keys for a top-level payload (happy-path validation).
+# Top-level keys a well-behaved model emits. Attribution (producer / variant /
+# wire / run_id) is also known to the wrapper — a prompt miss must not abort
+# a run that already has opportunities (2026-09-10 Grok Fri tick: rc=1,
+# `payload missing required key 'producer'`, paid-for finds discarded).
 REQUIRED_TOP_KEYS = ("producer", "variant", "wire", "opportunities")
 
 # Required keys for an individual opportunity object (salvage acceptance test).
@@ -39,6 +45,14 @@ REQUIRED_ITEM_KEYS = (
 
 # Top-level metadata keys we try to recover on salvage (all precede the array).
 META_KEYS = ("producer", "variant", "wire", "generated_at", "run_id")
+
+# Wrapper-known attribution. run-producer.sh exports these before extract.
+_STAMP_ENV = {
+    "producer": "SCOUT_PRODUCER",
+    "variant": "SCOUT_VARIANT",
+    "wire": "SCOUT_WIRE",
+    "run_id": "SCOUT_RUN_ID",
+}
 
 # Headless envelopes: Claude uses `result`; Grok Build uses `text` (+ sessionId).
 # Also accept a few aliases so a CLI rename doesn't drop a whole run.
@@ -93,14 +107,76 @@ def _is_payload(obj) -> bool:
     return isinstance(obj, dict) and "opportunities" in obj
 
 
+def wrapper_metadata() -> dict:
+    """Attribution the wrapper already knows. Model output is not the source of truth."""
+    meta = {}
+    for key, env_name in _STAMP_ENV.items():
+        val = (os.environ.get(env_name) or "").strip()
+        if val:
+            meta[key] = val
+    return meta
+
+
+def stamp_metadata(payload: dict) -> dict:
+    """Fill / override top-level attribution from wrapper env. Mutates a copy."""
+    if not isinstance(payload, dict):
+        return payload
+    payload = dict(payload)
+    meta = wrapper_metadata()
+    stamped = []
+    for key, val in meta.items():
+        prev = payload.get(key)
+        if prev != val:
+            stamped.append(key if key not in payload else f"{key}({prev!r}->{val!r})")
+        payload[key] = val
+    if "generated_at" not in payload or not str(payload.get("generated_at") or "").strip():
+        payload["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        stamped.append("generated_at")
+    if stamped:
+        print(f"[extract] stamped wrapper metadata: {', '.join(stamped)}", file=sys.stderr)
+    missing = [k for k in ("producer", "variant", "wire") if k not in payload]
+    if missing:
+        print(
+            f"[extract] payload still missing {', '.join(missing)} "
+            f"(wrapper did not stamp; keeping opportunities)",
+            file=sys.stderr,
+        )
+    return payload
+
+
+def normalize_payload(obj) -> dict:
+    """Coerce a parsed model object into a payload dict and stamp wrapper metadata.
+
+    A missing top-level `producer` (or variant/wire/run_id) is not fatal — the
+    wrapper stamps those. We only reject objects that are not a payload at all.
+    """
+    if isinstance(obj, list):
+        obj = {"opportunities": obj}
+    if not isinstance(obj, dict):
+        raise ValueError(f"payload is not an object (got {type(obj).__name__})")
+    obj = dict(obj)
+    if "opportunities" not in obj:
+        if "rejected" in obj or any(k in obj for k in META_KEYS):
+            obj["opportunities"] = []
+        else:
+            raise ValueError("payload missing required key 'opportunities'")
+    elif isinstance(obj["opportunities"], dict):
+        obj["opportunities"] = [obj["opportunities"]]
+    elif not isinstance(obj["opportunities"], list):
+        raise ValueError("opportunities must be an array")
+    return stamp_metadata(obj)
+
+
 def split_envelope(raw: dict):
     """Return (payload_dict_or_None, result_text).
 
     Grok's JSON object is `{text, stopReason, sessionId, ...}`. Claude's is
     `{result, total_cost_usd, ...}`. Either CLI may also write the producer
     payload as the top-level object (no envelope) or nest it as a dict.
+
+    A bare payload does not need `producer` — the wrapper stamps attribution.
     """
-    if _is_payload(raw) and "producer" in raw:
+    if _is_payload(raw):
         return raw, ""
     for k in _ENVELOPE_TEXT_KEYS:
         v = raw.get(k)
@@ -245,7 +321,7 @@ def salvage_payload(result_text: str) -> dict:
         f"dropped {dropped} malformed (payload was truncated/invalid)",
         file=sys.stderr,
     )
-    return payload
+    return stamp_metadata(payload)
 
 
 def main(raw_path: str, out_json: str) -> int:
@@ -270,18 +346,14 @@ def main(raw_path: str, out_json: str) -> int:
         )
     # Accept either shape: a CLI envelope (Claude `.result`, Grok `.text`) OR the
     # bare payload written straight to stdout. The producer must not depend on
-    # the model's stdout-envelope shape.
+    # the model's stdout-envelope shape. Missing top-level attribution is
+    # stamped from SCOUT_* env — never abort a parseable opportunities array.
     payload, result_text = split_envelope(raw)
     if payload is not None:
-        for k in REQUIRED_TOP_KEYS:
-            if k not in payload:
-                raise SystemExit(f"payload missing required key '{k}'")
+        payload = normalize_payload(payload)
     else:
         try:
-            payload = coerce_payload(result_text)
-            for k in REQUIRED_TOP_KEYS:
-                if k not in payload:
-                    raise SystemExit(f"payload missing required key '{k}'")
+            payload = normalize_payload(coerce_payload(result_text))
         except (json.JSONDecodeError, ValueError):
             # PARSE FAILURE: salvage per-item instead of aborting the whole run.
             # In the salvage path we do NOT enforce the top-level key check — a
