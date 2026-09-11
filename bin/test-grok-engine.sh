@@ -94,6 +94,68 @@ sout = json.load(open(social_out))
 check("x.com source_url is stripped from opportunities", sout.get("opportunities") == [])
 check("x.com source_url landed in rejected",
       any(r.get("source_url", "").startswith("https://x.com/") for r in sout.get("rejected") or []))
+
+# 2026-09-10: Grok Fri 06:00 wrote a complete opportunities array, omitted
+# top-level producer, extract aborted (`payload missing required key 'producer'`).
+for k in ("SCOUT_PRODUCER", "SCOUT_VARIANT", "SCOUT_WIRE", "SCOUT_RUN_ID"):
+    os.environ.pop(k, None)
+no_meta = {
+    "opportunities": [payload["opportunities"][0]],
+    "rejected": [],
+}
+no_meta_raw = {
+    "text": json.dumps(no_meta),
+    "stopReason": "error",
+    "sessionId": "sess-910",
+    "numTurns": 5,
+    "modelUsage": {"grok-4.6-build": {"totalTokens": 2262318, "modelCalls": 5}},
+}
+no_meta_in = os.path.join(sys.argv[2], "raw-no-meta.json")
+no_meta_out = os.path.join(sys.argv[2], "opps-no-meta.json")
+json.dump(no_meta_raw, open(no_meta_in, "w"))
+try:
+    rc = extract.main(no_meta_in, no_meta_out)
+    nout = json.load(open(no_meta_out))
+    check("missing producer does not abort extract", rc == 0)
+    check("missing-producer run keeps the opportunity",
+          len(nout.get("opportunities") or []) == 1)
+    check("missing-producer run does not invent a producer without wrapper env",
+          "producer" not in nout)
+except SystemExit as e:
+    check(f"missing producer must not SystemExit ({e})", False)
+
+os.environ["SCOUT_PRODUCER"] = "grok-build"
+os.environ["SCOUT_VARIANT"] = "A"
+os.environ["SCOUT_WIRE"] = "crypto"
+os.environ["SCOUT_RUN_ID"] = "grok-build-2026-09-11T060000Z"
+stamped_out = os.path.join(sys.argv[2], "opps-stamped.json")
+rc = extract.main(no_meta_in, stamped_out)
+sout = json.load(open(stamped_out))
+check("wrapper stamps producer=grok-build", sout.get("producer") == "grok-build")
+check("wrapper stamps variant/wire/run_id",
+      sout.get("variant") == "A" and sout.get("wire") == "crypto"
+      and sout.get("run_id") == "grok-build-2026-09-11T060000Z")
+check("stamped payload still has the opportunity",
+      len(sout.get("opportunities") or []) == 1)
+check("stamped payload has generated_at", bool(sout.get("generated_at")))
+
+# Bare payload without producer used to be skipped by split_envelope
+# (required `producer` on the top-level object) and then fail coerce of "".
+got, text = extract.split_envelope(no_meta)
+check("bare payload without producer is still a payload",
+      got is no_meta and text == "")
+
+# Root array of opportunities (model skipped the wrapper object entirely).
+root_arr_in = os.path.join(sys.argv[2], "raw-root-array.json")
+root_arr_out = os.path.join(sys.argv[2], "opps-root-array.json")
+json.dump({"text": json.dumps([payload["opportunities"][0]])}, open(root_arr_in, "w"))
+rc = extract.main(root_arr_in, root_arr_out)
+rout = json.load(open(root_arr_out))
+check("root array is wrapped into opportunities",
+      rc == 0 and len(rout.get("opportunities") or []) == 1
+      and rout.get("producer") == "grok-build")
+for k in ("SCOUT_PRODUCER", "SCOUT_VARIANT", "SCOUT_WIRE", "SCOUT_RUN_ID"):
+    os.environ.pop(k, None)
 sys.exit(1 if fails else 0)
 PY
 [ $? -eq 0 ] && ok "extract.py grok envelope matrix" || bad "extract.py grok envelope matrix"
@@ -252,6 +314,14 @@ if mode == "ok":
     out(json.dumps(p)); sys.exit(0)
 if mode == "auth":
     out("not authenticated: run grok login", stopReason="Error"); sys.exit(1)
+# 2026-09-10 production shape: complete finds, no top-level producer, CLI rc=1.
+if mode == "no-meta":
+    p = {"opportunities": [{"name": "Grok No-Meta Grant", "source_url": base + "/g1",
+             "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31",
+             "summary": "Test grant.", "classification": "GRANT", "fit_score": 80,
+             "fit_reason": "fresh x lead", "evidence": [base + "/g1"],
+             "discovered_via": "x_search"}], "rejected": []}
+    out(json.dumps(p), stopReason="error", numTurns=5); sys.exit(1)
 out(""); sys.exit(0)
 PY
 chmod +x "$TMP/bin/timeout" "$TMP/bin/grok"
@@ -356,6 +426,43 @@ print("  ok: grok-scout AUTH remedy" if ok else f"  FAIL: {d.text!r}")
 sys.exit(0 if ok else 1)
 PY
 [ $? -eq 0 ] && ok "heartbeat grok-scout AUTH text" || bad "heartbeat grok-scout AUTH text"
+
+echo "== 8. grok omits producer + exits 1 -> stamp, deliver, no alert =="
+rm -f "$CAP/submit.json" "$CAP/alerts.log"
+CASE_OUT="$(env PATH="$TMP/bin:$PATH" GROK="$TMP/bin/grok" GROK_STUB_MODE=no-meta \
+   MOCK_BASE="$BASEURL" WIRE_ROOM_API="$BASEURL" INTERNAL_API_KEY=test \
+   NOTIFY_WEBHOOK_URL="$BASEURL/webhook" SCOUT_PRIME_KNOWN=0 \
+   SCOUT_ENGINE=grok GROK_MODEL=stub GROK_HOME="$TMP/grokhome" \
+   GROK_AUTH_JSON='{"access_token":"test"}' \
+   "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -eq 0 ] && ok "no-meta grok run-scout rc=0" \
+  || { printf '%s\n' "$CASE_OUT" | tail -25; bad "no-meta grok rc=$CASE_RC"; }
+printf '%s\n' "$CASE_OUT" | grep -q "payload missing required key" \
+  && bad "no-meta path still aborted on missing producer" \
+  || ok "no-meta path no longer says missing producer"
+[ -s "$CAP/submit.json" ] && ok "no-meta grok lane still delivered" \
+  || bad "no-meta grok did not submit"
+[ -z "$(cat "$CAP/alerts.log" 2>/dev/null || true)" ] && ok "no-meta grok fired no alert" \
+  || bad "no-meta grok alerted: $(cat "$CAP/alerts.log" 2>/dev/null)"
+if [ -n "${d:-}" ] && [ -f "$d/opportunities.json" ] && [ -f "$d/meta.json" ]; then
+  python3 - "$d/opportunities.json" "$d/meta.json" <<'PY'
+import json, sys
+p = json.load(open(sys.argv[1]))
+m = json.load(open(sys.argv[2]))
+ok = (p.get("producer") == "grok-build" and p.get("variant") == "A"
+      and p.get("wire") == "crypto" and len(p.get("opportunities") or []) == 1
+      and m.get("producer") == "grok-build" and m.get("opportunity_count") == 1)
+sys.exit(0 if ok else 1)
+PY
+  [ $? -eq 0 ] && ok "no-meta payload+meta stamped grok-build" \
+    || bad "no-meta stamp/count wrong: $(cat "$d/opportunities.json" | head -c 400)"
+  printf '%s\n' "$CASE_OUT" | grep -q "stamped wrapper metadata" \
+    && ok "extract logged the wrapper stamp" || bad "extract did not log stamp"
+else
+  bad "missing no-meta run artifacts"
+fi
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"

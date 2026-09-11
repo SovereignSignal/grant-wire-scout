@@ -214,6 +214,13 @@ fi
 # --- extract the producer payload (the model's `result` text holds our JSON object) ---
 # extract.py already salvages truncated / mid-array JSON. Run it even after a timeout so a
 # killed claude that flushed a partial envelope does not discard paid-for finds.
+# Attribution is a wrapper concern. Grok (2026-09-10 Fri 06:00) emitted a complete
+# opportunities array, omitted top-level `producer`, and extract aborted the run
+# (`payload missing required key 'producer'`). Stamp what we already know.
+export SCOUT_PRODUCER="$PRODUCER"
+export SCOUT_VARIANT="$VARIANT"
+export SCOUT_WIRE="$WIRE"
+export SCOUT_RUN_ID="$RUN_ID"
 extract_rc=0
 python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.json" \
   || extract_rc=$?
