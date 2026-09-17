@@ -185,6 +185,13 @@ check("empty grok envelope -> EMPTY",
 check("grok 429 in text -> QUOTA",
       write("q.json", {"text": "HTTP 429 rate limit", "is_error": True}),
       "QUOTA")
+check("max_tokens_truncation inside .text -> EMPTY",
+      write("mt.json", {"text": 'Error: Internal error: {"error_kind": "max_tokens_truncation"}',
+                        "stopReason": "error"}),
+      "EMPTY")
+bare = os.path.join(tmp, "bare.txt")
+open(bare, "w").write('Error: Internal error: {\n "message": "response truncated by max_tokens"\n}')
+check("bare (non-JSON) truncation blob -> EMPTY", bare, "EMPTY")
 check("cli timed-out envelope -> TIMEOUT",
       write("t.json", {"text": "", "stopReason": "Error", "is_error": True,
                        "error": "command timed out"}),
@@ -314,6 +321,39 @@ if mode == "ok":
     out(json.dumps(p)); sys.exit(0)
 if mode == "auth":
     out("not authenticated: run grok login", stopReason="Error"); sys.exit(1)
+# 2026-09-16 production shape: Grok CLI 1.0.5 hit its per-response output cap on the
+# final turn (reasoning ate the budget), printed an internal-error blob instead of a
+# payload, rc=1. Nothing for extract to salvage.
+TRUNC = ('Error: Internal error: {\n  "message": "response truncated by max_tokens",\n'
+         '  "error_kind": "max_tokens_truncation",\n  "promptUsage": {"inputTokens": 304640,'
+         ' "outputTokens": 5070, "reasoningTokens": 3740, "modelCalls": 4}\n}\n')
+calls_f = os.environ.get("GROK_STUB_CALLS")
+n = 0
+if calls_f:
+    try: n = int(open(calls_f).read() or 0)
+    except Exception: n = 0
+    n += 1
+    open(calls_f, "w").write(str(n))
+    open(calls_f + ".argv." + str(n), "w").write("\n".join(sys.argv[1:]))
+prompt = " ".join(sys.argv[1:])
+is_oss = "\noss \u2014 " in prompt
+def ok_payload(name):
+    return {"producer": "grok-build", "variant": "A", "wire": "crypto", "run_id": "e2e-g",
+         "generated_at": "2026-08-22T00:00:00Z", "rejected": [],
+         "opportunities": [{"name": name, "source_url": base + "/g1", "wire": "crypto",
+             "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "classification": "GRANT",
+             "fit_score": 80, "fit_reason": "fresh x lead", "evidence": [base + "/g1"],
+             "discovered_via": "x_search"}]}
+def truncated():
+    out(TRUNC, stopReason="error", numTurns=4); sys.exit(1)
+if mode == "truncated-then-ok":
+    if n <= 1: truncated()
+    out(json.dumps(ok_payload("Grok Retry Grant"))); sys.exit(0)
+if mode == "truncated-always":
+    truncated()
+if mode == "oss-truncated":
+    if is_oss: truncated()
+    out(json.dumps(ok_payload("Grok Crypto Grant"))); sys.exit(0)
 # 2026-09-10 production shape: complete finds, no top-level producer, CLI rc=1.
 if mode == "no-meta":
     p = {"opportunities": [{"name": "Grok No-Meta Grant", "source_url": base + "/g1",
@@ -463,6 +503,70 @@ PY
 else
   bad "missing no-meta run artifacts"
 fi
+
+grok_env(){ # $1=stub mode, rest = extra env
+  local mode="$1"; shift
+  env PATH="$TMP/bin:$PATH" GROK="$TMP/bin/grok" GROK_STUB_MODE="$mode" GROK_STUB_CALLS="$CAP/calls" \
+     MOCK_BASE="$BASEURL" WIRE_ROOM_API="$BASEURL" INTERNAL_API_KEY=test \
+     NOTIFY_WEBHOOK_URL="$BASEURL/webhook" SCOUT_PRIME_KNOWN=0 \
+     SCOUT_ENGINE=grok GROK_MODEL=stub GROK_HOME="$TMP/grokhome" \
+     GROK_AUTH_JSON='{"access_token":"test"}' "$@"
+}
+reset_cap(){ rm -f "$CAP/submit.json" "$CAP/alerts.log" "$CAP/calls" "$CAP"/calls.argv.*; }
+
+echo "== 9. max_tokens_truncation -> retry once at low reasoning effort, deliver, no alert =="
+reset_cap
+CASE_OUT="$(grok_env truncated-then-ok "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -eq 0 ] && ok "truncated-then-ok rc=0" \
+  || { printf '%s\n' "$CASE_OUT" | tail -25; bad "truncated-then-ok rc=$CASE_RC"; }
+[ "$(cat "$CAP/calls" 2>/dev/null)" = "2" ] && ok "grok invoked exactly twice" \
+  || bad "grok call count: $(cat "$CAP/calls" 2>/dev/null)"
+grep -q -- "--reasoning-effort" "$CAP/calls.argv.2" 2>/dev/null \
+  && grep -A1 -- "--reasoning-effort" "$CAP/calls.argv.2" | grep -qx "low" \
+  && ok "retry passes --reasoning-effort low" || bad "retry did not lower reasoning effort"
+grep -q -- "--reasoning-effort" "$CAP/calls.argv.1" 2>/dev/null \
+  && bad "first attempt already lowered reasoning effort" || ok "first attempt runs at default effort"
+printf '%s\n' "$CASE_OUT" | grep -qi "truncat.*retry" && ok "producer logged the retry" \
+  || bad "producer did not log a truncation retry"
+[ -s "$CAP/submit.json" ] && ok "retry delivered to Wire Room" || bad "retry did not submit"
+[ -z "$(cat "$CAP/alerts.log" 2>/dev/null || true)" ] && ok "successful retry fired no alert" \
+  || bad "successful retry alerted: $(cat "$CAP/alerts.log")"
+[ -n "${d:-}" ] && [ -s "$d/raw.attempt1.json" ] && grep -q max_tokens_truncation "$d/raw.attempt1.json" \
+  && ok "first attempt's raw output kept as raw.attempt1.json" || bad "first attempt raw output not preserved"
+
+echo "== 10. truncation on both attempts -> EMPTY alert, exactly two calls =="
+reset_cap
+CASE_OUT="$(grok_env truncated-always "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -ne 0 ] && ok "truncated-always rc!=0" || bad "truncated-always returned rc=0"
+[ "$(cat "$CAP/calls" 2>/dev/null)" = "2" ] && ok "retry is bounded to one extra call" \
+  || bad "grok call count: $(cat "$CAP/calls" 2>/dev/null) (want 2)"
+grep -q "EMPTY" "$CAP/alerts.log" 2>/dev/null && ok "double truncation alerts EMPTY" \
+  || bad "double truncation alert: $(cat "$CAP/alerts.log" 2>/dev/null)"
+[ ! -s "$CAP/submit.json" ] && ok "double truncation delivered nothing" || bad "double truncation submitted"
+
+echo "== 11. run-all: one wire delivered, one wire dead -> rc=0 (alert still fires) =="
+reset_cap
+CASE_OUT="$(grok_env oss-truncated SERVICE_ROLE=grok-scout SCOUT_WIRES="crypto oss" \
+   "$TMP/bin/bash" "$ROOT/bin/run-all.sh" 2>&1)"; CASE_RC=$?
+for d in $(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p'); do RUN_DIRS+=("$d"); done
+[ "$CASE_RC" -eq 0 ] && ok "run-all rc=0 when at least one wire delivered" \
+  || { printf '%s\n' "$CASE_OUT" | tail -20; bad "run-all rc=$CASE_RC with a delivered wire (want 0)"; }
+[ -s "$CAP/submit.json" ] && ok "crypto still delivered" || bad "crypto did not submit"
+grep -q "EMPTY.*oss" "$CAP/alerts.log" 2>/dev/null && ok "oss EMPTY alert still fired" \
+  || bad "oss alert missing: $(cat "$CAP/alerts.log" 2>/dev/null)"
+printf '%s\n' "$CASE_OUT" | grep -q "run-all\].*1 of 2" && ok "run-all summarizes wires delivered" \
+  || bad "run-all summary line missing"
+
+echo "== 12. run-all: every wire dead -> rc=1 =="
+reset_cap
+CASE_OUT="$(grok_env oss-truncated SERVICE_ROLE=grok-scout SCOUT_WIRES="oss" \
+   "$TMP/bin/bash" "$ROOT/bin/run-all.sh" 2>&1)"; CASE_RC=$?
+for d in $(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p'); do RUN_DIRS+=("$d"); done
+[ "$CASE_RC" -eq 1 ] && ok "run-all rc=1 when no wire delivered" || bad "run-all rc=$CASE_RC (want 1)"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"

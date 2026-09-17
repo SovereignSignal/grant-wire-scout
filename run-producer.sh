@@ -192,8 +192,26 @@ if [[ "$ENGINE" == "grok" ]]; then
   if [[ -n "${GROK_SANDBOX:-}" && "${GROK_SANDBOX}" != "off" ]]; then
     GROK_ARGS+=(--sandbox "$GROK_SANDBOX")
   fi
-  "${TIMEOUT[@]}" "$GROK_BIN" "${GROK_ARGS[@]}" \
-    > "$RAW_JSON" || producer_rc=$?
+  # Grok CLI 1.0.5 can hit its per-response output cap on the FINAL turn: reasoning tokens
+  # eat the budget before the JSON is written, and the CLI returns an internal-error blob
+  # ("error_kind": "max_tokens_truncation") with no payload — nothing for extract to salvage.
+  # Seen on oss 2026-09-11 and 2026-09-16 (2 of 5 ticks). The CLI has no output-token flag,
+  # so the lever is one retry at --reasoning-effort low. Bounded to a single retry.
+  grok_attempt=1
+  while :; do
+    producer_rc=0
+    "${TIMEOUT[@]}" "$GROK_BIN" "${GROK_ARGS[@]}" \
+      > "$RAW_JSON" || producer_rc=$?
+    if [[ "$producer_rc" -ne 0 && "$producer_rc" -ne 124 && "$grok_attempt" -eq 1 ]] \
+       && grep -q "max_tokens_truncation" "$RAW_JSON" 2>/dev/null; then
+      echo "[producer] grok output truncated by max_tokens on attempt 1 — retrying once at --reasoning-effort low" >&2
+      mv "$RAW_JSON" "$RUN_DIR/raw.attempt1.json"
+      GROK_ARGS+=(--reasoning-effort low)
+      grok_attempt=2
+      continue
+    fi
+    break
+  done
 else
   CLAUDE="${CLAUDE:-claude}"
   "${TIMEOUT[@]}" "$CLAUDE" -p "$(cat "$PROMPT_FILE")" \
