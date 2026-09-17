@@ -53,10 +53,18 @@ fi
 VARIANTS="${SCOUT_VARIANTS:-${SCOUT_VARIANT:-A}}"
 WIRES="${SCOUT_WIRES:-crypto ai oss}"
 
-rc=0
+# Exit code = "did this tick deliver anything", not "did every wire succeed". Railway paints
+# a cron deployment CRASHED on any non-zero exit, so a tick that fed crypto and ai but lost
+# oss used to show as a crash. Each failed wire still alerts and writes its ledger row from
+# run-scout.sh; the heartbeat pages a lane that delivers nothing. Non-zero only when no wire
+# delivered (or skipped cleanly), which is the case that actually needs eyes.
+ran=0; delivered=0
 for w in $WIRES; do
   for v in $VARIANTS; do
-    "$ROOT/bin/run-scout.sh" "$w" "$v" || rc=1
+    ran=$((ran+1))
+    "$ROOT/bin/run-scout.sh" "$w" "$v" && delivered=$((delivered+1))
   done
 done
-exit "$rc"
+echo "[run-all] $delivered of $ran wires delivered (engine=$ENGINE)"
+[ "$delivered" -gt 0 ] && exit 0
+exit 1

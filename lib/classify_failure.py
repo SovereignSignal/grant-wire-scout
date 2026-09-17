@@ -17,9 +17,15 @@ import sys
 
 def classify(raw_path):
     try:
-        d = json.load(open(raw_path))
+        raw_text = open(raw_path).read()
     except Exception:
         return "OTHER"
+    try:
+        d = json.loads(raw_text)
+    except Exception:
+        # Not an envelope at all (the CLI printed an error blob straight to stdout).
+        # Still classify from the text so a known signal does not land as FAILED.
+        d = {"text": raw_text}
     if not isinstance(d, dict):
         return "OTHER"
 
@@ -36,7 +42,9 @@ def classify(raw_path):
     # Output truncation (the model hit its output/context token ceiling → truncated,
     # unparseable JSON) is "no usable output" — NOT a billing cap and NOT an auth issue.
     # Route to EMPTY so the alert reads honestly instead of "Max usage cap hit".
-    if any(s in blob for s in ("max tokens", "maximum output tokens", "context length", "token limit")):
+    if any(s in blob for s in (
+        "max tokens", "max_tokens", "maximum output tokens", "context length", "token limit",
+    )):
         return "EMPTY"
     # AUTH matches only genuine authentication signals — never the bare word "token".
     if any(s in blob for s in (

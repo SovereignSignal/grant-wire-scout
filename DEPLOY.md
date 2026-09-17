@@ -108,6 +108,16 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
 - **Split Grok sources:** keep submitting as `grok-scout` until wire-room-ops adds
   `grok-build` to `SCAN_SOURCES`. Then set `SCOUT_SCAN_SOURCE=grok-build` on
   `grant-wire-grok`. Do not flip first — WRO will reject the batch.
+- **Grok `EMPTY` on a thin wire (oss):** Grok CLI 1.0.5 can hit its per-response output
+  cap on the final turn (reasoning eats the budget before the JSON is written) and return
+  `"error_kind": "max_tokens_truncation"` with no payload. The producer retries that once at
+  `--reasoning-effort low`; the first attempt's output is kept as `raw.attempt1.json`. Two
+  truncations in a row still alert `EMPTY`.
+- **Railway's CRASHED badge means "nothing delivered", not "a wire failed".** `run-all.sh`
+  exits 0 when at least one wire delivered (or skipped cleanly) and 1 only when every wire
+  failed. A failed wire still emails its own alert and writes its ledger row; the heartbeat
+  pages a lane that delivered nothing. Before 2026-09-17 one dead wire painted the whole
+  tick CRASHED even when the other two had fed the queue.
 - **Lane-dead mail:** heartbeat still does not SILENT a wire the other lane fed, but
   it will page `LANE: Claude` (or Grok) if that producer wrote no ok/skipped ledger
   row, or failed AUTH/QUOTA, in the window. A timeout / `other` / empty on one
