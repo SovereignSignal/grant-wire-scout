@@ -46,8 +46,14 @@ def normalize_url(u: str) -> str:
     # Lowercase only the HOST (case-insensitive), NOT the path: paths can be case-
     # sensitive, so lowercasing them risks false-dropping a distinct find (recall-
     # negative). Applied identically to the seen set and producer URLs so the forms match.
+    u = (u or "").strip()
+    # The endpoint's `normalized_url` is already scheme-less ("host/path"). urlparse puts
+    # that whole string in `path` with an empty netloc, so it normalized to "" and never
+    # matched a producer URL — the seen set was populated and the dedup still dropped 0.
+    if u and "://" not in u:
+        u = "https://" + u
     try:
-        p = urllib.parse.urlparse(u.strip())
+        p = urllib.parse.urlparse(u)
     except Exception:
         return ""
     if not p.netloc:
