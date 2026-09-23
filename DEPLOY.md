@@ -108,6 +108,17 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
 - **Split Grok sources:** keep submitting as `grok-scout` until wire-room-ops adds
   `grok-build` to `SCAN_SOURCES`. Then set `SCOUT_SCAN_SOURCE=grok-build` on
   `grant-wire-grok`. Do not flip first — WRO will reject the batch.
+- **`TIMEOUT` mail:** the hunt ran past `SCOUT_PRODUCER_TIMEOUT` (2400s). Both CLIs emit
+  their `--output-format json` envelope as one object when they finish, so a killed run
+  leaves `raw.json` empty — there is never anything on disk to salvage. Since 2026-09-23
+  the producer pins a `--session-id`, and after a kill it `--resume`s that session with
+  search tools disabled and asks it to write the JSON for what it had already verified
+  (`SCOUT_SALVAGE_TIMEOUT`, default 300s). The mail's `[producer] TIMEOUT` lines say what
+  came back; `meta.json` carries `wall_clock_s`, `session_id`, `salvaged_via_resume`.
+  Both kills so far (2026-09-05 Claude oss, 2026-09-23 Grok oss) were oss runs primed at
+  the `SCOUT_KNOWN_LIMIT` cap (400 names): a thin wire told "everything is known" hunts
+  until the clock runs out. If it repeats, lower `SCOUT_KNOWN_LIMIT` on that lane or raise
+  the cap. `SCOUT_SESSION_RESUME=0` restores the old no-resume behaviour.
 - **Grok `EMPTY` on a thin wire (oss):** Grok CLI 1.0.5 can hit its per-response output
   cap on the final turn (reasoning eats the budget before the JSON is written) and return
   `"error_kind": "max_tokens_truncation"` with no payload. The producer retries that once at
