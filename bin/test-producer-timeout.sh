@@ -28,6 +28,7 @@ fail(){ echo "FAIL: $1" >&2; exit 1; }
 # command-substitution pipe open (a `( sleep; kill ) &` subshell leaks its sleep child on kill).
 cat > "$TMP/timeout" <<'EOF'
 #!/usr/bin/env bash
+[ "$1" = "-k" ] && shift 2   # accept GNU `-k GRACE` (the producer passes it)
 dur="$1"; shift
 "$@" & cmd=$!
 sleep "$dur" & slp=$!
@@ -44,13 +45,24 @@ EOF
 chmod +x "$TMP/timeout"
 
 # stub `claude`: STUB_MODE=sleep-first (default) sleeps then writes — a kill during
-# the sleep leaves raw.json empty. STUB_MODE=write-first flushes a valid envelope
-# then sleeps, so a kill still leaves something to salvage.
+# the sleep leaves raw.json empty (the real CLI's json output is one object at exit, so
+# this is the production shape of a timeout). STUB_MODE=write-first flushes a valid
+# envelope then sleeps, so a kill still leaves something to salvage.
+# A `--resume` call (the producer's resume-flush after a kill) answers per STUB_RESUME:
+# `payload` returns the finds the killed session had verified; anything else returns
+# nothing and exits 1, like a session that was never persisted.
 cat > "$TMP/claude" <<'EOF'
 #!/usr/bin/env bash
 payload='{"result":"{\"producer\":\"claude-code\",\"variant\":\"A\",\"wire\":\"crypto\",\"run_id\":\"test\",\"generated_at\":\"2026-06-30T00:00:00Z\",\"opportunities\":[{\"name\":\"Timeout Salvage Grant\",\"source_url\":\"https://127.0.0.1:1/timeout-salvage\",\"wire\":\"crypto\",\"amount\":\"$10k\",\"deadline\":\"2026-12-31\",\"summary\":\"Flushed before the kill.\",\"classification\":\"GRANT\",\"fit_score\":80,\"fit_reason\":\"test\",\"evidence\":[\"https://127.0.0.1:1/timeout-salvage\"],\"discovered_via\":\"web_search\"}],\"rejected\":[]}","total_cost_usd":0.01,"duration_ms":1234,"is_error":false}'
 empty='{"result":"{\"producer\":\"claude-code\",\"variant\":\"A\",\"wire\":\"crypto\",\"run_id\":\"test\",\"generated_at\":\"2026-06-30T00:00:00Z\",\"opportunities\":[],\"rejected\":[]}","total_cost_usd":0.01,"duration_ms":1234,"is_error":false}'
 mode="${STUB_MODE:-sleep-first}"
+for a in "$@"; do
+  if [ "$a" = "--resume" ]; then
+    echo "$*" > "${STUB_RESUME_ARGV:-/dev/null}"
+    if [ "${STUB_RESUME:-none}" = "payload" ]; then printf '%s' "$payload"; exit 0; fi
+    exit 1
+  fi
+done
 if [ "$mode" = "write-first" ]; then
   printf '%s' "$payload"
   sleep "${STUB_SLEEP:-1}"
@@ -68,7 +80,42 @@ o1="$("${base[@]}" STUB_SLEEP=5 STUB_MODE=sleep-first SCOUT_PRODUCER_TIMEOUT=2 "
 d1="$(printf '%s\n' "$o1" | sed -n 's/^RUN_DIR=//p' | tail -1)"; CLEAN_DIRS+=("${d1:-}")
 [ "$rc" -eq 124 ] || { printf '%s\n' "$o1" | tail -12; fail "expected rc=124 when nothing was flushed, got rc=$rc"; }
 printf '%s\n' "$o1" | grep -q "TIMEOUT" || fail "unrecoverable timeout did not say TIMEOUT"
+printf '%s\n' "$o1" | grep -q "raw.json is empty" || fail "timeout did not say raw.json was empty"
+printf '%s\n' "$o1" | grep -q "resume flush returned no payload" || fail "timeout did not report the failed resume flush"
 echo "ok: rc=124, nothing to salvage"
+
+echo "== case 1b: cap (2s) < run (5s), nothing flushed, resumed session flushes -> rc=0 =="
+o1b="$("${base[@]}" STUB_SLEEP=5 STUB_MODE=sleep-first STUB_RESUME=payload STUB_RESUME_ARGV="$TMP/resume.argv" \
+      SCOUT_PRODUCER_TIMEOUT=2 "$ROOT/run-producer.sh" --wire crypto --variant A 2>&1)"; rc=$?
+d1b="$(printf '%s\n' "$o1b" | sed -n 's/^RUN_DIR=//p' | tail -1)"; CLEAN_DIRS+=("${d1b:-}")
+[ "$rc" -eq 0 ] || { printf '%s\n' "$o1b" | tail -15; fail "expected resume-flush salvage rc=0, got rc=$rc"; }
+printf '%s\n' "$o1b" | grep -q "resuming session" || fail "producer did not attempt a resume flush"
+grep -q -- "--resume" "$TMP/resume.argv" || fail "resume call did not pass --resume"
+grep -q -- "--disallowedTools WebSearch WebFetch" "$TMP/resume.argv" || fail "resume call did not forbid search tools"
+sid="$(sed -n 's/.*--resume \([0-9a-f-]*\).*/\1/p' "$TMP/resume.argv")"
+[ -n "$sid" ] || fail "resume call had no session id"
+[ -e "$d1b/raw.killed.json" ] || fail "killed run's raw.json was not kept as raw.killed.json"
+python3 - "$d1b/opportunities.json" "$d1b/meta.json" "$sid" <<'PY' || fail "resume-flush artifacts invalid"
+import json, sys
+opps = json.load(open(sys.argv[1])).get("opportunities") or []
+assert len(opps) == 1 and opps[0]["name"] == "Timeout Salvage Grant", opps
+meta = json.load(open(sys.argv[2]))
+assert meta.get("timed_out") is True, meta
+assert meta.get("salvaged_via_resume") is True, meta
+assert meta.get("session_id") == sys.argv[3], (meta.get("session_id"), sys.argv[3])
+assert meta.get("opportunity_count") == 1, meta
+assert isinstance(meta.get("wall_clock_s"), int) and meta["wall_clock_s"] >= 2, meta
+assert meta.get("duration_ms") == meta["wall_clock_s"] * 1000, meta
+PY
+echo "ok: resume flush recovered 1 opportunity, rc=0"
+
+echo "== case 1c: SCOUT_SESSION_RESUME=0 -> no session pin, no resume, rc=124 =="
+o1c="$("${base[@]}" STUB_SLEEP=5 STUB_MODE=sleep-first STUB_RESUME=payload SCOUT_SESSION_RESUME=0 \
+      SCOUT_PRODUCER_TIMEOUT=2 "$ROOT/run-producer.sh" --wire crypto --variant A 2>&1)"; rc=$?
+d1c="$(printf '%s\n' "$o1c" | sed -n 's/^RUN_DIR=//p' | tail -1)"; CLEAN_DIRS+=("${d1c:-}")
+[ "$rc" -eq 124 ] || fail "with session resume off, expected rc=124, got rc=$rc"
+printf '%s\n' "$o1c" | grep -q "no pinned session to resume" || fail "resume-off path did not explain itself"
+echo "ok: opt-out honoured"
 
 echo "== case 2: cap (2s) < run (5s), payload already flushed -> salvage rc=0 =="
 o2="$("${base[@]}" STUB_SLEEP=5 STUB_MODE=write-first SCOUT_PRODUCER_TIMEOUT=2 "$ROOT/run-producer.sh" --wire crypto --variant A 2>&1)"; rc=$?

@@ -2,7 +2,7 @@
 
 # Parameterized via run-producer.sh. Substitutions: {{PRODUCER_LABEL}}, {{PRODUCER}},
 # {{WIRE}}, {{WIRE_DEFINITION}}, {{VARIANT}}, {{VARIANT_RULES}}, {{SOURCE_DOMAINS}},
-# {{TARGET_COUNT}}, {{TODAY}}, {{RUN_ID}}, {{DISCOVERY_METHOD}}, {{DISCOVERED_VIA}}.
+# {{TARGET_COUNT}}, {{TODAY}}, {{RUN_ID}}, {{DISCOVERY_METHOD}}, {{DISCOVERED_VIA}}, {{TIME_BUDGET}}.
 # The known-programs block is spliced post-render from lib/known_programs.py (empty if no DB).
 
 You are the **{{PRODUCER_LABEL}}**, a scheduled producer in Sov's
@@ -11,6 +11,9 @@ REAL, CURRENTLY-OPEN {{WIRE}} funding opportunities, verify each one at its
 canonical source, and return them as strict JSON.
 
 Today is {{TODAY}}.
+
+## Time budget
+{{TIME_BUDGET}}
 
 ## Wire
 {{WIRE}} — {{WIRE_DEFINITION}}

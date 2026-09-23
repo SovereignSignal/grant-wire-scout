@@ -337,7 +337,12 @@ def main(raw_path: str, out_json: str) -> int:
         # The raw file ITSELF is malformed/truncated — happens with the bare-payload
         # shape (the model wrote the payload straight to stdout and it was cut off mid
         # output). Don't abort the whole run: salvage opportunities from the raw text.
-        payload = reject_lead_urls(salvage_payload(raw_text))
+        try:
+            payload = reject_lead_urls(salvage_payload(raw_text))
+        except ValueError as e:
+            # A CLI error blob or prose, not JSON: fail with a one-line reason instead
+            # of a traceback so the alert mail's tail stays readable.
+            raise SystemExit(f"raw file is not JSON and {e}: {raw_path}") from e
         Path(out_json).write_text(json.dumps(payload, indent=2))
         return 0
     if raw.get("is_error"):
@@ -358,7 +363,10 @@ def main(raw_path: str, out_json: str) -> int:
             # PARSE FAILURE: salvage per-item instead of aborting the whole run.
             # In the salvage path we do NOT enforce the top-level key check — a
             # missing top-level key must never throw away salvaged opportunities.
-            payload = salvage_payload(result_text)
+            try:
+                payload = salvage_payload(result_text)
+            except ValueError as e:
+                raise SystemExit(f"producer result is not a payload and {e}") from e
 
     Path(out_json).write_text(json.dumps(reject_lead_urls(payload), indent=2))
     return 0

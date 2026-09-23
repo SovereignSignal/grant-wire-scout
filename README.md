@@ -38,7 +38,7 @@ Stringer intake (Hermes cron 12:00 UTC) ──► reads cohorts + Notion DB ─�
 | `lib/skip_if_fed.py` | Opt-in: skip a wire the other lane just filled |
 | `bin/scoreboard.sh` | Weekly approve-of-decided by source × wire × variant |
 | `lib/digest.py` | Daily visibility email: queue finds, models used, week/month spend |
-| `runs/<wire>/<variant>/<run_id>/` | Per-run artifact: `opportunities.json`, `report.md`, `raw.json`, `meta.json` |
+| `runs/<wire>/<variant>/<run_id>/` | Per-run artifact: `opportunities.json`, `report.md`, `raw.json`, `meta.json`, `producer.stderr` (+ `raw.killed.json` / `raw.salvage.json` after a timeout) |
 
 ## Output contract (the important bit)
 

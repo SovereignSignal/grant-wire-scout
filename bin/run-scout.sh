@@ -82,13 +82,26 @@ if [ "$rc" -ne 0 ]; then
     cls="$(python3 "$ROOT/lib/classify_failure.py" "$run_dir/raw.json" 2>/dev/null || echo OTHER)"
   fi
   case "$cls" in
-    AUTH)    subj="⚠️ Grant Wire Scout AUTH — ${LANE} credentials rejected ($WIRE/$VARIANT); $AUTH_HINT" ;;
-    QUOTA)   subj="⚠️ Grant Wire Scout QUOTA — ${LANE} usage cap hit ($WIRE/$VARIANT)" ;;
-    EMPTY)   subj="⚠️ Grant Wire Scout EMPTY — ${LANE} produced no usable output ($WIRE/$VARIANT)" ;;
-    TIMEOUT) subj="⚠️ Grant Wire Scout TIMEOUT — ${LANE} hit the wall-clock cap ($WIRE/$VARIANT)" ;;
-    *)       subj="⚠️ Grant Wire Scout FAILED ($LANE $WIRE/$VARIANT, rc=$rc)" ;;
+    AUTH)    subj="⚠️ Grant Wire Scout AUTH — ${LANE} credentials rejected ($WIRE/$VARIANT); $AUTH_HINT"
+             hint="The CLI rejected its credentials. $AUTH_HINT. The hydrate_grok_auth lines below (Grok) say whether the on-disk token was live or expired." ;;
+    QUOTA)   subj="⚠️ Grant Wire Scout QUOTA — ${LANE} usage cap hit ($WIRE/$VARIANT)"
+             hint="The subscription's usage cap was hit. Nothing to rotate; the lane tries again on its next cron. Look only if it repeats across ticks." ;;
+    EMPTY)   subj="⚠️ Grant Wire Scout EMPTY — ${LANE} produced no usable output ($WIRE/$VARIANT)"
+             hint="The model finished but returned no usable JSON (on Grok, usually the per-response output cap on the final turn; the producer already retried once at low reasoning effort). raw.json / raw.attempt1.json in the run dir hold what came back." ;;
+    TIMEOUT) subj="⚠️ Grant Wire Scout TIMEOUT — ${LANE} hit the wall-clock cap ($WIRE/$VARIANT)"
+             hint="The hunt ran past SCOUT_PRODUCER_TIMEOUT (${SCOUT_PRODUCER_TIMEOUT:-2400}s). Both CLIs write their JSON only when they finish, so raw.json is empty after a kill; the wrapper resumed the killed session and asked it to flush what it had verified — the [producer] TIMEOUT lines below say what came back. If this repeats on the same wire, that wire's hunt does not fit the cap: it is usually a thin wire primed at the SCOUT_KNOWN_LIMIT cap (see the 'primed with' line). Lower SCOUT_KNOWN_LIMIT for that lane, or raise SCOUT_PRODUCER_TIMEOUT." ;;
+    *)       subj="⚠️ Grant Wire Scout FAILED ($LANE $WIRE/$VARIANT, rc=$rc)"
+             hint="Unclassified failure — read the run log tail below. raw.json and producer.stderr in the run dir hold the CLI's output." ;;
   esac
-  printf '%s\n' "$out" | tail -25 | alert "$subj"
+  {
+    echo "$LANE · $WIRE/$VARIANT · model=$MODEL · $cls (rc=$rc) · $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "run_dir: ${run_dir:-?}"
+    echo
+    echo "$hint"
+    echo
+    echo "--- last 40 lines of the run log ---"
+    printf '%s\n' "$out" | tail -40
+  } | alert "$subj"
   ledger "$(printf '%s' "$cls" | tr 'A-Z' 'a-z')" "$cls"
   exit "$rc"
 fi

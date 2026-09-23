@@ -27,7 +27,10 @@ bad(){ echo "  FAIL: $1" >&2; FAILN=$((FAILN+1)); }
 has(){ grep -qiF -- "$2" "$1"; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"; rm -rf "$ROOT"/runs/*/A/*-rendertest-* 2>/dev/null' EXIT
+# Every render leaves runs/<wire>/A/<producer>-<ts>/; record them and remove them on exit.
+# (The old glob *-rendertest-* matched nothing, so each test run leaked a few run dirs.)
+: > "$TMP/rendered"
+trap 'xargs -r rm -rf < "$TMP/rendered" 2>/dev/null; rm -rf "$TMP"' EXIT
 
 render(){  # render <wire> [engine] -> prints the prompt path
   local wire="$1" engine="${2:-claude}" out
@@ -36,6 +39,7 @@ render(){  # render <wire> [engine] -> prints the prompt path
     echo "RENDER FAILED ($wire/$engine): $(tail -3 "$TMP/err.$wire")" >&2; return 1; }
   local dir
   dir="$(sed -n 's/^RUN_DIR=//p' <<<"$out" | tail -1)"
+  [ -n "$dir" ] && echo "$dir" >> "$TMP/rendered"
   [ -f "$dir/prompt.txt" ] || { echo "no prompt.txt in $dir" >&2; return 1; }
   echo "$dir/prompt.txt"
 }
