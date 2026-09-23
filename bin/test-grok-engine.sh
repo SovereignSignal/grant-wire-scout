@@ -294,6 +294,33 @@ ok = r.returncode == 0 and inner.get("refresh_token") == "env-refresh" and "wrot
 sys.exit(0 if ok else 1)
 PY
 [ $? -eq 0 ] && ok "hydrate writes newer env seed over stale disk" || bad "hydrate did not replace stale disk"
+
+# CLI refresh: the volume file keeps the login's create_time but carries a NEWER expires_at.
+# Comparing create_time against expires_at (mixed fields) used to be possible; the compare
+# must be like-for-like, and the log must say what the token's state is.
+python3 - "$TMP/volhome3" "$ROOT" <<'PY'
+import json, os, sys, subprocess
+vol, root = sys.argv[1], sys.argv[2]
+os.makedirs(vol, exist_ok=True)
+disk = {"https://auth.x.ai::test": {"create_time": "2026-08-22T13:00:00Z",
+        "expires_at": "2026-09-23T12:00:00Z", "refresh_token": "disk-refresh"}}
+env = {"https://auth.x.ai::test": {"create_time": "2026-08-22T13:00:00Z",
+       "expires_at": "2026-08-22T19:00:00Z", "refresh_token": "env-refresh"}}
+open(os.path.join(vol, "auth.json"), "w").write(json.dumps(disk))
+envp = os.environ.copy(); envp["GROK_HOME"] = vol; envp["GROK_AUTH_JSON"] = json.dumps(env)
+envp.pop("XAI_API_KEY", None)
+r = subprocess.run(["python3", os.path.join(root, "lib/hydrate_grok_auth.py")],
+                   env=envp, capture_output=True, text=True)
+got = json.load(open(os.path.join(vol, "auth.json")))
+inner = next(iter(got.values()))
+ok = (r.returncode == 0 and inner.get("refresh_token") == "disk-refresh"
+      and "keeping on-disk" in r.stdout and "access token" in r.stdout
+      and "2026-09-23T12:00:00" in r.stdout and "disk-refresh" not in r.stdout)
+if not ok: print(r.stdout, r.stderr, file=sys.stderr)
+sys.exit(0 if ok else 1)
+PY
+[ $? -eq 0 ] && ok "hydrate keeps a CLI-refreshed session and logs its expiry (no secret)" \
+  || bad "hydrate mishandled a CLI-refreshed session"
 unset GROK_AUTH_JSON
 
 echo "== 5. happy path: stub grok -> submit source=grok-scout, no alert =="
