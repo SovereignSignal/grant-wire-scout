@@ -72,7 +72,16 @@ def fetch_seen(api_base: str, wire: str, key: str) -> set[str]:
     )
     with opener.open(req, timeout=30) as r:
         data = json.load(r)
-    seen = data.get("urls") or data.get("items") or []
+    # Accept {urls:[...]}, {items:[...]}, or a bare array. A bare array used to raise
+    # AttributeError here, which the wrapper swallowed as "dedup skipped (API error)"
+    # — so the stage silently did nothing whenever the endpoint answered with a list.
+    if isinstance(data, list):
+        seen = data
+    elif isinstance(data, dict):
+        seen = data.get("urls") or data.get("items") or []
+    else:
+        seen = []
+    seen = [row if isinstance(row, dict) else {"url": row} for row in seen if row]
     if len(seen) >= limit:
         print(f"[dedup] WARNING: hit the seen-urls cap ({limit}) — dedup may be partial; "
               f"raise DEDUP_SEEN_LIMIT", file=sys.stderr)

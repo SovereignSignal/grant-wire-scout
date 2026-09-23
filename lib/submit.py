@@ -94,7 +94,16 @@ def main(opps_path, wire, variant, scan_date, api_base=None):
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             with opener.open(req, timeout=60) as r:
-                resp = json.load(r)
+                status = r.status
+                raw_body = r.read()
+            # A 2xx is a delivery. If the body is not JSON (edge/proxy page, empty
+            # body) the batch still landed — reporting "could not reach" here made the
+            # wrapper page DELIVERY and the ledger record a failure for rows that were
+            # in the queue, which the heartbeat then read as lost-in-delivery.
+            try:
+                resp = json.loads(raw_body)
+            except ValueError:
+                resp = {"summary": f"HTTP {status}, non-JSON body ({len(raw_body)} bytes)"}
             break
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="ignore")[:300]
