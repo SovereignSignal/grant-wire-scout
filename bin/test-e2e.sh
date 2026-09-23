@@ -14,6 +14,7 @@
 #   F malformed JSON    -> "FAILED" alert (extract parse failure)
 #   G delivery HTTP 500 -> "DELIVERY" alert, nonzero exit
 #   H timeout after flush -> delivered, NO alert, rc=0         (salvage)
+#   I timeout, nothing flushed, resumed session flushes -> delivered, NO alert, rc=0
 #
 # Alerts are captured via notify.py's webhook fallback (NOTIFY_WEBHOOK_URL) pointed at the
 # mock — no prod code change. Wire Room submit/seen-urls are mocked. DATABASE_URL is unset so
@@ -60,6 +61,7 @@ ln -sf "$BASH" "$TMP/bin/bash"   # modern bash first on PATH -> #!/usr/bin/env b
 # whose sleep child would orphan on kill and hold the caller's command-substitution pipe open.
 cat > "$TMP/bin/timeout" <<'SH'
 #!/usr/bin/env bash
+[ "$1" = "-k" ] && shift 2   # accept GNU `-k GRACE` (the producer passes it)
 dur="$1"; shift
 "$@" & cmd=$!
 sleep "$dur" & slp=$!
@@ -89,6 +91,12 @@ def payload():
          "opportunities": [{"name": "E2E Test Grant", "source_url": base + "/g1", "wire": "crypto",
              "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "classification": "GRANT",
              "fit_score": 80, "fit_reason": "test", "evidence": [base + "/g1"], "discovered_via": "web_search"}]}
+if "--resume" in sys.argv:
+    # The producer's resume-flush after a wall-clock kill. STUB_RESUME=payload plays a
+    # session that had verified finds; the default plays one that had nothing to give.
+    if os.environ.get("STUB_RESUME") == "payload":
+        out(json.dumps(payload())); sys.exit(0)
+    out(json.dumps({**payload(), "opportunities": []})); sys.exit(0)
 if mode == "slow":
     time.sleep(int(os.environ.get("STUB_SLEEP", "5")))
     out(json.dumps(payload())); sys.exit(0)
@@ -164,6 +172,8 @@ run_case slow SCOUT_PRODUCER_TIMEOUT=2 STUB_SLEEP=5
 alerts | grep -q "TIMEOUT" && ok "alert: TIMEOUT" || bad "alert not TIMEOUT: $(alerts)"
 [ -z "$(cat "$CAP/submit.json" 2>/dev/null)" ] && ok "unrecoverable timeout did not submit" \
   || bad "unrecoverable timeout still submitted"
+printf '%s\n' "$CASE_OUT" | grep -q "resumed session had verified nothing" \
+  && ok "log says the resumed session had nothing to flush" || bad "timeout log lacks the resume outcome"
 
 echo "== C auth -> AUTH alert =="
 run_case auth
@@ -191,6 +201,14 @@ run_case flush-then-slow SCOUT_PRODUCER_TIMEOUT=2 STUB_SLEEP=5
 [ "$CASE_RC" -eq 0 ] && ok "salvage rc=0" || { printf '%s\n' "$CASE_OUT" | tail -20; bad "salvage rc=$CASE_RC"; }
 [ -s "$CAP/submit.json" ] && ok "salvaged find delivered" || bad "salvage did not submit"
 [ -z "$(alerts)" ] && ok "no TIMEOUT alert after salvage" || bad "salvage still alerted: $(alerts)"
+
+echo "== I timeout, nothing flushed, resume flush recovers -> deliver + no alert =="
+run_case slow SCOUT_PRODUCER_TIMEOUT=2 STUB_SLEEP=5 STUB_RESUME=payload
+[ "$CASE_RC" -eq 0 ] && ok "resume-flush rc=0" || { printf '%s\n' "$CASE_OUT" | tail -20; bad "resume-flush rc=$CASE_RC"; }
+[ -s "$CAP/submit.json" ] && ok "resumed session's finds delivered" || bad "resume flush did not submit"
+[ -z "$(alerts)" ] && ok "no TIMEOUT alert after resume flush" || bad "resume flush still alerted: $(alerts)"
+printf '%s\n' "$CASE_OUT" | grep -q "via resume flush" && ok "producer logged the resume salvage" \
+  || bad "producer did not log the resume salvage"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"

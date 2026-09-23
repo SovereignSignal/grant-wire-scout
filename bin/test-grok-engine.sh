@@ -298,9 +298,17 @@ unset GROK_AUTH_JSON
 
 echo "== 5. happy path: stub grok -> submit source=grok-scout, no alert =="
 ln -sf "$BASH" "$TMP/bin/bash"
+# `timeout` shim: no real clock. GROK_STUB_FORCE_TIMEOUT=1 plays the wall-clock kill for
+# the MAIN call only (exit 124, nothing on stdout — json output is one object at exit); the
+# producer's `--resume` flush still runs, so the salvage path can be exercised.
 cat > "$TMP/bin/timeout" <<'SH'
 #!/usr/bin/env bash
+[ "$1" = "-k" ] && shift 2
 dur="$1"; shift
+if [ "${GROK_STUB_FORCE_TIMEOUT:-0}" = "1" ]; then
+  is_resume=0; for a in "$@"; do [ "$a" = "--resume" ] && is_resume=1; done
+  [ "$is_resume" = "0" ] && exit 124
+fi
 exec "$@"
 SH
 cat > "$TMP/bin/grok" <<'PY'
@@ -311,6 +319,20 @@ base = os.environ.get("MOCK_BASE", "http://127.0.0.1")
 def out(text, **x):
     d = {"text": text, "stopReason": "EndTurn", "sessionId": "e2e", "requestId": "r"}
     d.update(x); sys.stdout.write(json.dumps(d))
+if "--resume" in sys.argv:
+    # Resume-flush after a wall-clock kill. Record the argv so the test can pin the flags.
+    argv_f = os.environ.get("GROK_STUB_RESUME_ARGV")
+    if argv_f: open(argv_f, "w").write("\n".join(sys.argv[1:]))
+    if os.environ.get("GROK_STUB_RESUME") == "payload":
+        p = {"producer": "grok-build", "variant": "A", "wire": "crypto", "run_id": "e2e-g",
+             "generated_at": "2026-09-23T00:00:00Z", "rejected": [],
+             "opportunities": [{"name": "Grok Resume Flush Grant", "source_url": base + "/g1",
+                 "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.",
+                 "classification": "GRANT", "fit_score": 80, "fit_reason": "verified before the kill",
+                 "evidence": [base + "/g1"], "discovered_via": "x_search"}]}
+        out(json.dumps(p)); sys.exit(0)
+    out(json.dumps({"producer": "grok-build", "variant": "A", "wire": "crypto", "opportunities": [],
+                    "rejected": []})); sys.exit(0)
 if mode == "ok":
     p = {"producer": "grok-build", "variant": "A", "wire": "crypto", "run_id": "e2e-g",
          "generated_at": "2026-08-22T00:00:00Z", "rejected": [],
@@ -567,6 +589,48 @@ CASE_OUT="$(grok_env oss-truncated SERVICE_ROLE=grok-scout SCOUT_WIRES="oss" \
    "$TMP/bin/bash" "$ROOT/bin/run-all.sh" 2>&1)"; CASE_RC=$?
 for d in $(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p'); do RUN_DIRS+=("$d"); done
 [ "$CASE_RC" -eq 1 ] && ok "run-all rc=1 when no wire delivered" || bad "run-all rc=$CASE_RC (want 1)"
+
+echo "== 13. wall-clock kill, raw.json empty -> resume flush recovers the session's finds =="
+reset_cap; rm -f "$CAP/resume.argv"
+CASE_OUT="$(grok_env ok GROK_STUB_FORCE_TIMEOUT=1 GROK_STUB_RESUME=payload GROK_STUB_RESUME_ARGV="$CAP/resume.argv" \
+   SCOUT_PRODUCER_TIMEOUT=5 "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -eq 0 ] && ok "grok timeout + resume flush rc=0" \
+  || { printf '%s\n' "$CASE_OUT" | tail -25; bad "grok timeout + resume flush rc=$CASE_RC"; }
+[ -s "$CAP/submit.json" ] && ok "resumed grok session's finds delivered" || bad "grok resume flush did not submit"
+[ -z "$(cat "$CAP/alerts.log" 2>/dev/null || true)" ] && ok "no TIMEOUT alert after grok resume flush" \
+  || bad "grok resume flush alerted: $(cat "$CAP/alerts.log")"
+grep -qx -- "--resume" "$CAP/resume.argv" 2>/dev/null && ok "grok flush passes --resume" || bad "grok flush lacks --resume"
+grep -qx -- "--disable-web-search" "$CAP/resume.argv" 2>/dev/null && ok "grok flush disables web search" \
+  || bad "grok flush did not disable web search"
+grep -qx -- "--always-approve" "$CAP/resume.argv" 2>/dev/null && ok "grok flush keeps --always-approve" \
+  || bad "grok flush lost --always-approve"
+if [ -n "${d:-}" ] && [ -f "$d/meta.json" ]; then
+  python3 - "$d/meta.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+sys.exit(0 if m.get("timed_out") is True and m.get("salvaged_via_resume") is True
+         and m.get("opportunity_count") == 1 and m.get("session_id") else 1)
+PY
+  [ $? -eq 0 ] && ok "meta.json records timed_out + salvaged_via_resume + session_id" \
+    || bad "meta.json missing timeout/salvage fields: $(cat "$d/meta.json")"
+  [ -e "$d/raw.killed.json" ] && ok "killed run's empty raw.json kept as raw.killed.json" \
+    || bad "raw.killed.json not kept"
+else
+  bad "missing grok timeout run meta.json"
+fi
+
+echo "== 14. wall-clock kill, resumed session had verified nothing -> TIMEOUT alert, rc!=0 =="
+reset_cap
+CASE_OUT="$(grok_env ok GROK_STUB_FORCE_TIMEOUT=1 SCOUT_PRODUCER_TIMEOUT=5 \
+   "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -eq 124 ] && ok "empty resume flush still exits 124" || bad "empty resume flush rc=$CASE_RC (want 124)"
+grep -q "TIMEOUT" "$CAP/alerts.log" 2>/dev/null && ok "empty resume flush alerts TIMEOUT" \
+  || bad "empty resume flush alert: $(cat "$CAP/alerts.log" 2>/dev/null)"
+[ ! -s "$CAP/submit.json" ] && ok "empty resume flush delivered nothing" || bad "empty resume flush submitted"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"

@@ -79,6 +79,34 @@ fi
 TODAY="$(date -u +%Y-%m-%d)"
 TODAY_TS="$(date -u +%Y-%m-%dT%H%M%SZ)"
 
+# --- portable wall-clock cap on the producer. This is a SAFETY NET for a genuinely hung
+#     claude/grok -p, NOT the normal work limiter: real work is bounded by --max-turns and cost is
+#     turn/token-driven, not wall-clock-driven, so a higher cap costs nothing extra — it just
+#     lets the paid-for turn budget finish.
+#     History: 600s was under-provisioned once known-catalog priming landed (2026-06-30,
+#     rc=124, work discarded). 1200s held until OSS primed with the full 400-name cap
+#     (2026-09-05 Claude oss/A). 2400s is the new default; override with SCOUT_PRODUCER_TIMEOUT.
+#     Defined up here because the rendered prompt tells the model its budget ({{TIME_BUDGET}}).
+#     Both CLIs print their JSON envelope ONLY when they finish (`--output-format json` is one
+#     object at the end), so a run killed at the cap leaves raw.json EMPTY — there is nothing
+#     on disk to salvage. 2026-09-23 Grok oss/A: 2400s, raw.json empty, work discarded. The
+#     recovery below therefore RESUMES the killed session and asks it to write the JSON now.
+#     -k gives the CLI a grace period after SIGTERM, then SIGKILLs it so a signal-ignoring
+#     process cannot hold the cron open forever. ---
+PRODUCER_TIMEOUT="${SCOUT_PRODUCER_TIMEOUT:-2400}"
+TIMEOUT_GRACE="${SCOUT_TIMEOUT_GRACE:-30}"
+if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout -k "$TIMEOUT_GRACE")
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT=(gtimeout -k "$TIMEOUT_GRACE")
+else TIMEOUT=(); echo "[producer] note: no timeout binary — running uncapped" >&2; fi
+capped() {  # capped <seconds> <cmd...>: run under the wall-clock cap when a timeout binary exists
+  local dur="$1"; shift
+  if [[ ${#TIMEOUT[@]} -gt 0 ]]; then "${TIMEOUT[@]}" "$dur" "$@"; else "$@"; fi
+}
+# Minutes the model is told it has; leave it headroom to write the JSON before the kill.
+TIME_BUDGET_MIN="$(( PRODUCER_TIMEOUT / 60 ))"
+TIME_BUDGET_DISCOVER_MIN="$(( PRODUCER_TIMEOUT * 6 / 10 / 60 ))"
+TIME_BUDGET="You have a HARD wall-clock budget of about ${TIME_BUDGET_MIN} minutes for this entire run (searching, fetching, and writing the JSON). A run that overruns is killed and every find in it is lost. Pace yourself: stop discovering new candidates after roughly ${TIME_BUDGET_DISCOVER_MIN} minutes, spend the rest verifying what you have, and write the final JSON with time to spare. A complete JSON with fewer finds delivered in time beats a larger set that never gets written."
+
 if [[ "$ENGINE" == "grok" ]]; then
   PRODUCER="grok-build"
   PRODUCER_LABEL="Grok Build Grant Producer"
@@ -119,6 +147,7 @@ SUB_WIRE_DEFINITION="${WIRE_DEF[$WIRE]}" SUB_VARIANT="$VARIANT" SUB_VARIANT_RULE
 SUB_SOURCE_DOMAINS="${WIRE_SOURCES[$WIRE]}" SUB_TARGET_COUNT="$TARGET_COUNT" \
 SUB_TODAY="$TODAY" SUB_TODAY_TS="$TODAY_TS" SUB_RUN_ID="$RUN_ID" \
 SUB_DISCOVERED_VIA="$DISCOVERED_VIA" SUB_DISCOVERY_METHOD="$DISCOVERY_METHOD" \
+SUB_TIME_BUDGET="$TIME_BUDGET" \
 python3 - "${PRODUCER_ROOT}/prompts/producer.md" "$PROMPT_FILE" <<'PY'
 import os, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -148,6 +177,12 @@ PY
 KNOWN_N="$(grep -c '^- ' "$KNOWN_FILE" 2>/dev/null || true)"
 KNOWN_N="${KNOWN_N:-0}"
 echo "[producer] primed with ${KNOWN_N} already-known ${WIRE} programs"
+if grep -qF "(+ more not shown)" "$KNOWN_FILE" 2>/dev/null; then
+  # The list hit SCOUT_KNOWN_LIMIT: the wire's recent catalogue is LARGER than what the model
+  # was told. Both wall-clock kills so far (2026-09-05 Claude oss, 2026-09-23 Grok oss) were
+  # runs primed at the cap on a thin wire — the model hunts a long time for something new.
+  echo "[producer] note: known-programs list is capped at ${KNOWN_N} (SCOUT_KNOWN_LIMIT) — the ${WIRE} catalogue is larger; long hunts are likely on this wire"
+fi
 
 echo "[producer] engine=${ENGINE} wire=${WIRE} variant=${VARIANT} model=${MODEL} run=${RUN_ID}"
 echo "[producer] -> $RUN_DIR"
@@ -157,21 +192,34 @@ if [[ "$RENDER_ONLY" == "1" ]]; then
   exit 0
 fi
 
-# --- portable wall-clock cap on the producer. This is a SAFETY NET for a genuinely hung
-#     claude/grok -p, NOT the normal work limiter: real work is bounded by --max-turns and cost is
-#     turn/token-driven, not wall-clock-driven, so a higher cap costs nothing extra — it just
-#     lets the paid-for turn budget finish.
-#     History: 600s was under-provisioned once known-catalog priming landed (2026-06-30,
-#     rc=124, work discarded). 1200s held until OSS primed with the full 400-name cap
-#     (2026-09-05 Claude oss/A). 2400s is the new default; override with SCOUT_PRODUCER_TIMEOUT.
-#     A timeout no longer aborts the pipeline: we salvage whatever JSON already landed in
-#     raw.json and keep going when extract recovers opportunities. ---
-PRODUCER_TIMEOUT="${SCOUT_PRODUCER_TIMEOUT:-2400}"
-if command -v timeout >/dev/null 2>&1; then TIMEOUT=(timeout "$PRODUCER_TIMEOUT")
-elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT=(gtimeout "$PRODUCER_TIMEOUT")
-else TIMEOUT=(); echo "[producer] note: no timeout binary — running uncapped" >&2; fi
-
 RAW_JSON="$RUN_DIR/raw.json"
+STDERR_FILE="$RUN_DIR/producer.stderr"
+RUN_T0="$(date +%s)"
+
+# --- session pinning. Each invocation gets a UUID we choose, passed as --session-id to both
+#     CLIs. On SIGTERM both persist the session up to the last completed tool call, so after a
+#     wall-clock kill we can `--resume` it and ask for the JSON — the finds the model had
+#     already verified live in that session, not on disk. SCOUT_SESSION_RESUME=0 turns the
+#     pinning and the resume-flush off. ---
+SESSION_PIN="${SCOUT_SESSION_RESUME:-1}"
+SESSION_ID=""
+SESSION_ARGS=()
+new_session() {
+  SESSION_ID=""; SESSION_ARGS=()
+  if [[ "$SESSION_PIN" != "0" ]]; then
+    SESSION_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+    SESSION_ARGS=(--session-id "$SESSION_ID")
+  fi
+}
+# A flag this CLI build does not know makes it exit non-zero at once with a usage error on
+# stderr and nothing on stdout. Detect that so an untested flag can never kill every run.
+flag_rejected() {  # <stderr-file> <flag-name> <rc> <stdout-file>
+  [[ "$3" -ne 0 && "$3" -ne 124 && ! -s "$4" ]] && grep -qi -- "$2" "$1" 2>/dev/null
+}
+# stderr streams live to the log (Railway shows a hung CLI's complaints as they happen) AND
+# lands in a file for flag_rejected; wait for the tee so the file is complete before grep.
+capture_stderr() { tee "$STDERR_FILE" >&2; }
+settle_stderr() { wait "$!" 2>/dev/null || true; }
 
 # Isolate the model invoke so a 124 does not trip `set -e` and skip extract/salvage.
 producer_rc=0
@@ -199,9 +247,16 @@ if [[ "$ENGINE" == "grok" ]]; then
   # so the lever is one retry at --reasoning-effort low. Bounded to a single retry.
   grok_attempt=1
   while :; do
+    new_session
     producer_rc=0
-    "${TIMEOUT[@]}" "$GROK_BIN" "${GROK_ARGS[@]}" \
-      > "$RAW_JSON" || producer_rc=$?
+    capped "$PRODUCER_TIMEOUT" "$GROK_BIN" "${GROK_ARGS[@]}" ${SESSION_ARGS[@]+"${SESSION_ARGS[@]}"} \
+      > "$RAW_JSON" 2> >(capture_stderr) || producer_rc=$?
+    settle_stderr
+    if [[ -n "$SESSION_ID" ]] && flag_rejected "$STDERR_FILE" "session-id" "$producer_rc" "$RAW_JSON"; then
+      echo "[producer] grok rejected --session-id — retrying without session pinning (resume-flush unavailable)" >&2
+      SESSION_PIN=0
+      continue
+    fi
     if [[ "$producer_rc" -ne 0 && "$producer_rc" -ne 124 && "$grok_attempt" -eq 1 ]] \
        && grep -q "max_tokens_truncation" "$RAW_JSON" 2>/dev/null; then
       echo "[producer] grok output truncated by max_tokens on attempt 1 — retrying once at --reasoning-effort low" >&2
@@ -214,19 +269,79 @@ if [[ "$ENGINE" == "grok" ]]; then
   done
 else
   CLAUDE="${CLAUDE:-claude}"
-  "${TIMEOUT[@]}" "$CLAUDE" -p "$(cat "$PROMPT_FILE")" \
-    --model "$MODEL" \
-    --output-format json \
-    --permission-mode acceptEdits \
-    --allowedTools "WebSearch" "WebFetch" \
-    --max-turns "${SCOUT_MAX_TURNS:-100}" \
-    > "$RAW_JSON" || producer_rc=$?
+  while :; do
+    new_session
+    producer_rc=0
+    capped "$PRODUCER_TIMEOUT" "$CLAUDE" -p "$(cat "$PROMPT_FILE")" \
+      --model "$MODEL" \
+      --output-format json \
+      --permission-mode acceptEdits \
+      --allowedTools "WebSearch" "WebFetch" \
+      --max-turns "${SCOUT_MAX_TURNS:-100}" \
+      ${SESSION_ARGS[@]+"${SESSION_ARGS[@]}"} \
+      > "$RAW_JSON" 2> >(capture_stderr) || producer_rc=$?
+    settle_stderr
+    if [[ -n "$SESSION_ID" ]] && flag_rejected "$STDERR_FILE" "session-id" "$producer_rc" "$RAW_JSON"; then
+      echo "[producer] claude rejected --session-id — retrying without session pinning (resume-flush unavailable)" >&2
+      SESSION_PIN=0
+      continue
+    fi
+    break
+  done
 fi
+RUN_ELAPSED="$(( $(date +%s) - RUN_T0 ))"
+
+# --- resume-flush: the only salvage that can work after a kill. raw.json is empty by
+#     construction (json output is one object at exit), but the session on disk still holds
+#     every page the model fetched and verified. Resume it, forbid further searching, and
+#     give it a short cap to write the JSON it was about to write. ---
+SALVAGED_VIA_RESUME=0
+resume_flush() {
+  [[ -n "$SESSION_ID" ]] || { echo "[producer] TIMEOUT: no pinned session to resume — nothing to flush" >&2; return 1; }
+  local cap="${SCOUT_SALVAGE_TIMEOUT:-300}" turns="${SCOUT_SALVAGE_MAX_TURNS:-3}"
+  local out="$RUN_DIR/raw.salvage.json" err="$RUN_DIR/salvage.stderr" rc=0
+  local prompt="TIME IS UP. Do NOT run any more searches or fetches — your tool budget is gone. Return NOW the single JSON object described in your instructions (same shape, no prose, no markdown fences), containing ONLY the ${WIRE} opportunities you have ALREADY fetched and verified at their canonical source during this session. Put every candidate you did not finish verifying under rejected with classification NOISE and reason \"unverified at timeout\". If you verified nothing, return the object with an empty opportunities array."
+  echo "[producer] TIMEOUT: resuming session ${SESSION_ID} for up to ${cap}s to flush what was already verified" >&2
+  if [[ "$ENGINE" == "grok" ]]; then
+    local extra=(--disable-web-search)
+    while :; do
+      rc=0
+      capped "$cap" "$GROK_BIN" --no-auto-update -p "$prompt" --resume "$SESSION_ID" \
+        --model "$MODEL" --output-format json --always-approve --max-turns "$turns" \
+        ${extra[@]+"${extra[@]}"} > "$out" 2> "$err" || rc=$?
+      if [[ ${#extra[@]} -gt 0 ]] && flag_rejected "$err" "disable-web-search" "$rc" "$out"; then
+        extra=(); continue
+      fi
+      break
+    done
+  else
+    capped "$cap" "$CLAUDE" -p "$prompt" --resume "$SESSION_ID" \
+      --model "$MODEL" --output-format json --permission-mode acceptEdits \
+      --disallowedTools "WebSearch" "WebFetch" --max-turns "$turns" \
+      > "$out" 2> "$err" || rc=$?
+  fi
+  [[ -s "$err" ]] && cat "$err" >&2
+  if [[ -s "$out" ]] && grep -q opportunities "$out"; then
+    mv "$RAW_JSON" "$RUN_DIR/raw.killed.json"
+    mv "$out" "$RAW_JSON"
+    SALVAGED_VIA_RESUME=1
+    echo "[producer] TIMEOUT: resume flush returned a payload (rc=${rc}) — extracting from it" >&2
+    return 0
+  fi
+  echo "[producer] TIMEOUT: resume flush returned no payload (rc=${rc}, $(wc -c < "$out" 2>/dev/null || echo 0) bytes)" >&2
+  return 1
+}
 
 if [[ "$producer_rc" -eq 124 ]]; then
-  echo "[producer] TIMEOUT after ${PRODUCER_TIMEOUT}s — salvaging whatever landed in raw.json" >&2
+  echo "[producer] TIMEOUT after ${PRODUCER_TIMEOUT}s (elapsed ${RUN_ELAPSED}s, model=${MODEL}, primed=${KNOWN_N})" >&2
+  if grep -q opportunities "$RAW_JSON" 2>/dev/null; then
+    echo "[producer] TIMEOUT: raw.json holds a payload — salvaging it" >&2
+  else
+    echo "[producer] TIMEOUT: raw.json is empty ($(wc -c < "$RAW_JSON") bytes) — the CLI only writes its JSON when it finishes" >&2
+    resume_flush || true
+  fi
 elif [[ "$producer_rc" -ne 0 ]]; then
-  echo "[producer] model exited rc=${producer_rc}" >&2
+  echo "[producer] model exited rc=${producer_rc} after ${RUN_ELAPSED}s" >&2
 fi
 
 # --- extract the producer payload (the model's `result` text holds our JSON object) ---
@@ -244,7 +359,7 @@ python3 "${PRODUCER_ROOT}/lib/extract.py" "$RAW_JSON" "$RUN_DIR/opportunities.js
   || extract_rc=$?
 if [[ "$extract_rc" -ne 0 ]]; then
   if [[ "$producer_rc" -eq 124 ]]; then
-    echo "[producer] TIMEOUT: nothing recoverable from raw.json — giving up" >&2
+    echo "[producer] TIMEOUT: nothing recoverable (raw.json empty, resume flush $([[ "$SALVAGED_VIA_RESUME" == 1 ]] && echo "returned an unusable payload" || echo "returned nothing")) — giving up" >&2
     exit 124
   fi
   exit "$extract_rc"
@@ -260,11 +375,11 @@ except Exception:
 PY
 )"
   if [[ "${salvaged_n:-0}" -gt 0 ]]; then
-    echo "[producer] TIMEOUT: salvaged ${salvaged_n} opportunities — continuing the pipeline" >&2
+    echo "[producer] TIMEOUT: salvaged ${salvaged_n} opportunities$([[ "$SALVAGED_VIA_RESUME" == 1 ]] && echo " via resume flush") — continuing the pipeline" >&2
     producer_rc=0
     export SCOUT_TIMED_OUT=1
   else
-    echo "[producer] TIMEOUT: extract ran but recovered 0 opportunities — giving up" >&2
+    echo "[producer] TIMEOUT: extract ran but recovered 0 opportunities$([[ "$SALVAGED_VIA_RESUME" == 1 ]] && echo " (the resumed session had verified nothing yet)") — giving up" >&2
     exit 124
   fi
 elif [[ "$producer_rc" -ne 0 ]]; then
@@ -320,6 +435,8 @@ python3 "${PRODUCER_ROOT}/lib/report.py" "$RUN_DIR/opportunities.json" "$RUN_DIR
   || echo "[producer] report failed (non-fatal) — continuing"
 
 # --- meta + summary ---
+WALL_CLOCK_S="$(( $(date +%s) - RUN_T0 ))"
+SCOUT_WALL_CLOCK_S="$WALL_CLOCK_S" SCOUT_SESSION_ID="$SESSION_ID" SCOUT_SALVAGED_VIA_RESUME="$SALVAGED_VIA_RESUME" \
 python3 - "$RUN_DIR" "$WIRE" "$VARIANT" "$RUN_ID" "$MODEL" "$ENGINE" "$PRODUCER" <<'PY' > "$RUN_DIR/meta.json"
 import sys, json, os, datetime
 run_dir, wire, variant, run_id, model, engine, producer = sys.argv[1:8]
@@ -335,6 +452,10 @@ if os.path.exists(opps_path):
     except Exception: pass
 try: raw = json.load(open(os.path.join(run_dir, "raw.json"))) if os.path.exists(os.path.join(run_dir,"raw.json")) else {}
 except Exception: raw = {}
+if not isinstance(raw, dict): raw = {}
+try: wall_s = int(os.environ.get("SCOUT_WALL_CLOCK_S") or 0)
+except ValueError: wall_s = 0
+wall_ms = wall_s * 1000 or None
 print(json.dumps({
   "run_id": run_id, "wire": wire, "variant": variant, "model": model,
   "engine": engine, "producer": producer,
@@ -343,8 +464,15 @@ print(json.dumps({
   "found_count": funnel.get("found", n),
   "dedup_dropped": funnel.get("dedup_dropped", 0),
   "cost_usd": raw.get("total_cost_usd"),
-  "duration_ms": raw.get("duration_ms") or raw.get("durationMs"),
+  # Grok's json envelope carries no duration, and after a timeout raw.json is the short
+  # resume-flush envelope, not the hunt. The wrapper's own wall clock is the honest number
+  # in both cases so the ledger and the digest can say how long the hunt really took.
+  "duration_ms": (wall_ms if os.environ.get("SCOUT_TIMED_OUT") == "1" else None)
+                 or raw.get("duration_ms") or raw.get("durationMs") or wall_ms,
+  "wall_clock_s": wall_s,
   "timed_out": os.environ.get("SCOUT_TIMED_OUT") == "1",
+  "salvaged_via_resume": os.environ.get("SCOUT_SALVAGED_VIA_RESUME") == "1",
+  "session_id": os.environ.get("SCOUT_SESSION_ID") or None,
 }, indent=2))
 PY
 
