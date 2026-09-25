@@ -36,3 +36,5 @@ jobs:
         run: bin/test-producer-timeout.sh
       - name: test-validate
         run: bin/test-validate.sh
+      - name: test-ledger
+        run: python3 -m unittest discover -s tests -p 'test_ledger.py'
