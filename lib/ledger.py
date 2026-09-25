@@ -19,8 +19,28 @@ Env: DATABASE_URL (the Wire Room Postgres)
 """
 import json
 import os
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+
+def started_at_from_run_id(run_id):
+    """The wrapper stamps UTC at run creation, before discovery can fail.
+
+    Keep unfamiliar IDs unknown rather than substituting insertion time or
+    subtracting a provider-only duration from the end-to-end finish time.
+    """
+    match = re.fullmatch(
+        r"(?:claude-code|grok-build)-(\d{4}-\d{2}-\d{2}T\d{6}Z)(?:-skipped)?",
+        run_id,
+    )
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match[1], "%Y-%m-%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 def main(run_dir, status, error_class=None):
@@ -64,14 +84,16 @@ def main(run_dir, status, error_class=None):
                  f"dedup_dropped={meta.get('dedup_dropped')}")
     row["found_count"] = meta.get("found_count")
     row["dedup_dropped"] = meta.get("dedup_dropped")
+    row["started_at"] = started_at_from_run_id(row["run_id"])
 
     insert_funnel = """INSERT INTO scout_runs
                          (run_id, wire, variant, model, status, opportunity_count,
                           error_class, cost_usd, duration_ms, found_count, dedup_dropped,
-                          finished_at)
+                          started_at, finished_at)
                        VALUES (%(run_id)s, %(wire)s, %(variant)s, %(model)s, %(status)s,
                                %(opportunity_count)s, %(error_class)s, %(cost_usd)s,
-                               %(duration_ms)s, %(found_count)s, %(dedup_dropped)s, now())
+                               %(duration_ms)s, %(found_count)s, %(dedup_dropped)s,
+                               %(started_at)s, now())
                        ON CONFLICT (run_id) DO UPDATE SET
                          status            = EXCLUDED.status,
                          opportunity_count = EXCLUDED.opportunity_count,
@@ -80,19 +102,21 @@ def main(run_dir, status, error_class=None):
                          duration_ms       = EXCLUDED.duration_ms,
                          found_count       = EXCLUDED.found_count,
                          dedup_dropped     = EXCLUDED.dedup_dropped,
+                         started_at        = COALESCE(scout_runs.started_at, EXCLUDED.started_at),
                          finished_at       = now()"""
     insert_base = """INSERT INTO scout_runs
                          (run_id, wire, variant, model, status, opportunity_count,
-                          error_class, cost_usd, duration_ms, finished_at)
+                          error_class, cost_usd, duration_ms, started_at, finished_at)
                        VALUES (%(run_id)s, %(wire)s, %(variant)s, %(model)s, %(status)s,
                                %(opportunity_count)s, %(error_class)s, %(cost_usd)s,
-                               %(duration_ms)s, now())
+                               %(duration_ms)s, %(started_at)s, now())
                        ON CONFLICT (run_id) DO UPDATE SET
                          status            = EXCLUDED.status,
                          opportunity_count = EXCLUDED.opportunity_count,
                          error_class       = EXCLUDED.error_class,
                          cost_usd          = EXCLUDED.cost_usd,
                          duration_ms       = EXCLUDED.duration_ms,
+                         started_at        = COALESCE(scout_runs.started_at, EXCLUDED.started_at),
                          finished_at       = now()"""
     try:
         conn = psycopg2.connect(dsn)
