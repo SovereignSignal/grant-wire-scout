@@ -412,6 +412,22 @@ grep -qi "LANE" <<<"$body" && ok "AUTH + ok still pages LANE" || bad "AUTH + ok 
 grep -qi "AUTH\|setup-token" <<<"$body" && ok "AUTH + ok still names AUTH" \
                                         || bad "AUTH + ok lost AUTH copy: $body"
 
+echo "== B12. 2026-09-27 Claude QUOTA — pages until a later tick runs clean =="
+# Sun 04:00: crypto ok, then ai + oss hit the Max cap (429). Rows are oldest first.
+rc="$(run_hb '{"counts":[["crypto",8],["ai",4],["oss",3]],"runs":[["crypto","ok",1]],"lanes":[["claude-code-crypto","ok",1],["claude-code-ai","quota",0],["claude-code-oss","quota",0],["grok-build-oss","ok",1]]}')"
+body="$(alert_body)"
+grep -qi "lane-quota" <<<"$body" && ok "QUOTA after the last ok run still pages LANE" \
+                                 || bad "QUOTA after ok lost the page: $body"
+# Tue 04:00: all three wires ok. The Sunday QUOTA is still inside the 60h window.
+rc="$(run_hb '{"counts":[["crypto",8],["ai",4],["oss",3]],"runs":[["crypto","ok",1]],"lanes":[["claude-code-crypto","ok",1],["claude-code-ai","quota",0],["claude-code-oss","quota",0],["grok-build-oss","ok",1],["claude-code-crypto","ok",2],["claude-code-ai","ok",1],["claude-code-oss","ok",1]]}')"
+[ "$rc" = "0" ] && ok "recovered lane -> rc=0" || bad "recovered lane -> rc=$rc (want 0)"
+[ -z "$(alert_body)" ] && ok "a clean tick after QUOTA clears the LANE page" \
+                       || bad "recovered lane still paged: $(alert_body)"
+# A skip-if-fed tick never called the CLI; it does not prove the cap reset.
+rc="$(run_hb '{"counts":[["crypto",8],["ai",4],["oss",3]],"runs":[["crypto","ok",1]],"lanes":[["claude-code-ai","quota",0],["claude-code-crypto","skipped",0]]}')"
+grep -qi "lane-quota" <<<"$(alert_body)" && ok "skipped after QUOTA still pages" \
+                                         || bad "skipped after QUOTA cleared the page: $(alert_body)"
+
 echo "== C. multi-variant windows (SCOUT_VARIANTS='A B') =="
 
 # C1 THE MASKED CASE: variant A reported 3, variant B (tight-filter) reported 0, nothing landed.

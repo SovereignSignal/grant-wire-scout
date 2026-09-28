@@ -274,6 +274,13 @@ a_subj, a_text, _ = build(q=[], r=auth_runs, sp=[])
 check("auth day puts the failure in the subject", "auth" in a_subj.lower())
 check("auth day names the failed wire in the today line", "oss auth" in a_text)
 
+salvaged = [dg.RunRow("grok-build-y", "oss", "A", "grok-4.6", "ok", 2, 2, 0, 0.61, 2460000,
+                      "2026-09-02", "timeout-salvaged")]
+s_subj, s_text, _ = build(r=salvaged)
+s_today = next(l for l in s_text.splitlines() if l.startswith("Today"))
+check("salvaged timeout is ok, not a failure", "all ok" in s_today and "timeout" not in s_subj.lower())
+check("salvaged timeout is visible in the today line", "oss 2 (timed out, salvaged)" in s_today)
+
 # cap: two minutes means at most 15 finds in the mail
 many = [item(100 + i, f"Grant {i}", "crypto", "$1", "rolling", None, "queued", 50 - (i % 5), None,
              "GRANT", None, f"Description {i}") for i in range(20)]

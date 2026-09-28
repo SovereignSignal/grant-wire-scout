@@ -15,7 +15,9 @@ Best-effort by design: a ledger failure must NEVER break the run. Callers invoke
 
 Usage: ledger.py <run_dir> <status> [error_class]
   status: ok | auth | quota | empty | timeout | delivery | failed
+  error_class defaults to timeout-salvaged for an ok run whose meta.json says timed_out.
 Env: DATABASE_URL (the Wire Room Postgres)
+     SCOUT_WIRE / SCOUT_VARIANT / MODEL — fallbacks when meta.json is missing
 """
 import json
 import os
@@ -67,11 +69,18 @@ def main(run_dir, status, error_class=None):
         except Exception:
             n = None
 
+    # status stays ok (the finds were delivered); error_class is the only durable trace
+    # that the wall-clock cap fired and the resume flush rescued the run.
+    if not error_class and status == "ok" and meta.get("timed_out"):
+        error_class = "timeout-salvaged"
+    # A run that fails before the producer writes meta.json (AUTH, QUOTA, TIMEOUT) still
+    # has a wire and model: run-scout.sh passes them. Without them the row lands as
+    # wire='' — heartbeat's per-wire diagnosis skips it and the digest prints "? quota".
     row = {
         "run_id": meta.get("run_id") or rd.name,
-        "wire": meta.get("wire") or "",
-        "variant": meta.get("variant"),
-        "model": meta.get("model"),
+        "wire": meta.get("wire") or os.environ.get("SCOUT_WIRE") or "",
+        "variant": meta.get("variant") or os.environ.get("SCOUT_VARIANT") or None,
+        "model": meta.get("model") or os.environ.get("MODEL") or None,
         "status": status,
         "opportunity_count": n,
         "error_class": error_class,
