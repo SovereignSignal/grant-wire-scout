@@ -170,12 +170,21 @@ def collapse_lane(rows):
     page the whole lane when another wire already ran ok/skipped. That was the
     2026-09-05 LANE: Claude (lane-other) mail: crypto+ai ok, oss rc=124
     recorded as status=other, worst-status collapse called Claude dead.
+
+    Rows arrive oldest first. An ok run AFTER the last auth/quota row proves the
+    token and the cap are fine again, so that older failure no longer pages.
+    Without this, the 2026-09-27 04:23 Claude QUOTA would page LANE: Claude for
+    the whole 60h window, including after Tuesday's tick ran clean. `skipped`
+    does not count as recovery: a skip-if-fed tick never called the CLI.
     """
     rows = list(rows)
     if not rows:
         return None
     statuses = [(r[0] or "").strip().lower() for r in rows]
     opps = sum((r[1] or 0) for r in rows)
+    last_lane_wide = max((i for i, s in enumerate(statuses) if s in ("auth", "quota")), default=-1)
+    if last_lane_wide >= 0 and "ok" in statuses[last_lane_wide + 1:]:
+        statuses = statuses[last_lane_wide + 1:]
     if any(s == "auth" for s in statuses):
         status = "auth"
     elif any(s == "quota" for s in statuses):
@@ -450,7 +459,8 @@ def _fetch(dsn, hours, wires):
             cur.execute(
                 "/* hb:lanes */ SELECT run_id, status, opportunity_count FROM scout_runs "
                 "WHERE created_at > now() - (%s || ' hours')::interval "
-                "AND run_id LIKE ANY(%s)",
+                "AND run_id LIKE ANY(%s) "
+                "ORDER BY created_at",
                 (str(hours), likes),
             )
             raw_lanes = list(cur.fetchall())
