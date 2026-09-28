@@ -55,7 +55,7 @@ class LedgerTests(unittest.TestCase):
                       "grok-build-2026-02-30T042656Z", "grok-build-2026-09-24T042656Z-extra"):
             self.assertIsNone(ledger.started_at_from_run_id(value))
 
-    def write(self, *, metadata=True, missing_funnel=False):
+    def write(self, *, metadata=True, missing_funnel=False, status=None, env=None, meta_extra=None):
         conn = Connection(missing_funnel)
         with tempfile.TemporaryDirectory() as root:
             rd = Path(root) / "grok-build-2026-09-24T042656Z"
@@ -64,11 +64,12 @@ class LedgerTests(unittest.TestCase):
                 (rd / "meta.json").write_text(json.dumps({
                     "run_id": rd.name, "wire": "oss", "opportunity_count": 2,
                     "found_count": 5, "dedup_dropped": 3, "duration_ms": 1000,
+                    **(meta_extra or {}),
                 }))
-            with patch.dict(os.environ, {"DATABASE_URL": "postgresql://stub"}), \
+            with patch.dict(os.environ, {"DATABASE_URL": "postgresql://stub", **(env or {})}), \
                  patch.dict("sys.modules", {"psycopg2": types.SimpleNamespace(connect=lambda _: conn)}), \
                  contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(ledger.main(rd, "ok" if metadata else "timeout"), 0)
+                self.assertEqual(ledger.main(rd, status or ("ok" if metadata else "timeout")), 0)
         return conn.writes[0]
 
     def test_success_preserves_start_and_funnel(self):
@@ -82,6 +83,22 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(row["status"], "timeout")
         self.assertEqual(row["started_at"].isoformat(), "2026-09-24T04:26:56+00:00")
         self.assertIsNone(row["duration_ms"])
+
+    def test_failure_before_metadata_keeps_wrapper_wire_and_model(self):
+        _, row = self.write(metadata=False, status="quota",
+                            env={"SCOUT_WIRE": "ai", "SCOUT_VARIANT": "A", "MODEL": "claude-sonnet-4-6"})
+        self.assertEqual((row["wire"], row["variant"], row["model"]), ("ai", "A", "claude-sonnet-4-6"))
+
+    def test_meta_wins_over_wrapper_env(self):
+        _, row = self.write(env={"SCOUT_WIRE": "ai", "MODEL": "other"},
+                            meta_extra={"model": "grok-4.6"})
+        self.assertEqual((row["wire"], row["model"]), ("oss", "grok-4.6"))
+
+    def test_salvaged_timeout_is_ok_with_error_class(self):
+        _, row = self.write(meta_extra={"timed_out": True, "salvaged_via_resume": True})
+        self.assertEqual((row["status"], row["error_class"]), ("ok", "timeout-salvaged"))
+        _, row = self.write()
+        self.assertIsNone(row["error_class"])
 
     def test_pre_migration_fallback_retains_start(self):
         sql, row = self.write(missing_funnel=True)

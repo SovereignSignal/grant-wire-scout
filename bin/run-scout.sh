@@ -30,7 +30,7 @@ export MODEL
 # email an alert; body comes on stdin. A failed alert must not crash the run.
 alert() { python3 "$ROOT/lib/notify.py" "$1" || echo "[run-scout] ALERT SEND FAILED: $1" >&2; }
 # record the run outcome in the durable scout_runs ledger (M8; best-effort, needs DATABASE_URL)
-ledger() { python3 "$ROOT/lib/ledger.py" "$run_dir" "$1" "${2:-}" || true; }
+ledger() { SCOUT_WIRE="$WIRE" SCOUT_VARIANT="$VARIANT" python3 "$ROOT/lib/ledger.py" "$run_dir" "$1" "${2:-}" || true; }
 
 # 0. opt-in skip when the other lane just fed this wire (saves Max/SuperGrok on
 #    saturated ticks). Unset/0 = always run. Exit 10 = skip; anything else runs.
