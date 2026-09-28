@@ -54,7 +54,8 @@ QueueItem = namedtuple(
 RunRow = namedtuple(
     "RunRow",
     "run_id wire variant model status opportunity_count found_count "
-    "dedup_dropped cost_usd duration_ms created_at",
+    "dedup_dropped cost_usd duration_ms created_at error_class",
+    defaults=(None,),
 )
 ModelSpend = namedtuple(
     "ModelSpend",
@@ -235,7 +236,7 @@ def fetch(dsn, hours, sources):
                 cur.execute(
                     "/* digest:runs */ SELECT run_id, wire, variant, model, status, "
                     "opportunity_count, found_count, dedup_dropped, cost_usd, "
-                    "duration_ms, created_at FROM scout_runs "
+                    "duration_ms, created_at, error_class FROM scout_runs "
                     "WHERE created_at > now() - (%s || ' hours')::interval "
                     "AND run_id LIKE ANY(%s) "
                     "ORDER BY created_at",
@@ -245,7 +246,7 @@ def fetch(dsn, hours, sources):
             else:
                 cur.execute(
                     "/* digest:runs */ SELECT run_id, wire, variant, model, status, "
-                    "opportunity_count, cost_usd, duration_ms, created_at "
+                    "opportunity_count, cost_usd, duration_ms, created_at, error_class "
                     "FROM scout_runs "
                     "WHERE created_at > now() - (%s || ' hours')::interval "
                     "AND run_id LIKE ANY(%s) "
@@ -254,8 +255,8 @@ def fetch(dsn, hours, sources):
                 )
                 runs = [
                     RunRow(rid, wire, var, model, status, opps, None, None,
-                           cost, dur, created)
-                    for rid, wire, var, model, status, opps, cost, dur, created
+                           cost, dur, created, *rest)
+                    for rid, wire, var, model, status, opps, cost, dur, created, *rest
                     in cur.fetchall()
                 ]
         with conn.cursor() as cur:
@@ -367,6 +368,13 @@ def _review_key(item):
 
 
 def _funnel_bit(run):
+    bit = _funnel_counts(run)
+    if (run.error_class or "") == "timeout-salvaged":
+        bit += " (timed out, salvaged)"
+    return bit
+
+
+def _funnel_counts(run):
     kept = _int(run.opportunity_count)
     wire = run.wire or "?"
     found = run.found_count
