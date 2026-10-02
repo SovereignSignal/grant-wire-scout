@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """classify_failure.py — read a run's raw.json and classify a failure for alerting.
 
-Prints exactly one token: AUTH | QUOTA | EMPTY | TIMEOUT | OTHER. Best-effort and
+Prints exactly one token: UPGRADE | AUTH | QUOTA | EMPTY | TIMEOUT | OTHER. Best-effort and
 conservative — defaults to OTHER. Used by run-scout.sh to pick the right alert
 subject so an expired OAuth token reads as 'AUTH', not a generic failure.
 
@@ -33,6 +33,12 @@ def classify(raw_path):
         str(d.get(k) or "")
         for k in ("api_error_status", "result", "subtype", "error", "text", "stopReason", "message")
     ).lower()
+    # UPGRADE: the vendor API refuses this CLI build outright (xAI: `426 Upgrade Required`,
+    # "Your Grok CLI version (1.0.5) is outdated"). Checked first — it is not a quota, auth
+    # or empty-output problem, and nothing recovers until the pinned version is bumped.
+    # Matched on the full phrases only: a find's text can say "upgrade" or "$426,000".
+    if "426 upgrade required" in blob or ("cli version" in blob and "outdated" in blob):
+        return "UPGRADE"
     # QUOTA (genuine usage/rate signals) is checked BEFORE AUTH so a quota failure
     # wins even when its message also mentions tokens.
     if any(s in blob for s in (
