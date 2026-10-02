@@ -192,6 +192,18 @@ check("max_tokens_truncation inside .text -> EMPTY",
 bare = os.path.join(tmp, "bare.txt")
 open(bare, "w").write('Error: Internal error: {\n "message": "response truncated by max_tokens"\n}')
 check("bare (non-JSON) truncation blob -> EMPTY", bare, "EMPTY")
+# 2026-10-02 production shape: xAI refused Grok CLI 1.0.5 and all three wires mailed EMPTY.
+outdated = ("API error (status 426 Upgrade Required): Your Grok CLI version (1.0.5) is outdated. "
+            "Please update to version 1.0.13 or later via `grok update` or the installation documentation.")
+check("426 outdated-CLI error object -> UPGRADE",
+      write("up.json", {"message": outdated, "http_status": 426}),
+      "UPGRADE")
+bare_up = os.path.join(tmp, "bare-up.txt")
+open(bare_up, "w").write('Error: Internal error: {\n "message": "%s",\n "http_status": 426\n}' % outdated)
+check("bare (non-JSON) 426 blob -> UPGRADE", bare_up, "UPGRADE")
+check("a find that mentions an upgrade is not UPGRADE",
+      write("notup.json", {"text": "Protocol upgrade required a new grants round; $426,000 pool", "is_error": True}),
+      "OTHER")
 check("cli timed-out envelope -> TIMEOUT",
       write("t.json", {"text": "", "stopReason": "Error", "is_error": True,
                        "error": "command timed out"}),

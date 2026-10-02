@@ -81,7 +81,12 @@ if [ "$rc" -ne 0 ]; then
   else
     cls="$(python3 "$ROOT/lib/classify_failure.py" "$run_dir/raw.json" 2>/dev/null || echo OTHER)"
   fi
+  # Ledger status stays inside ledger.py's known set; error_class carries the detail.
+  ledger_status="$(printf '%s' "$cls" | tr 'A-Z' 'a-z')"
   case "$cls" in
+    UPGRADE) subj="⚠️ Grant Wire Scout CLI OUTDATED — ${LANE} refused by the vendor API ($WIRE/$VARIANT); bump the pinned CLI version"
+             hint="The vendor API rejected this CLI build as too old (426 Upgrade Required). Every wire on this lane fails the same way until the pin moves: raise GROK_CLI_VERSION (Grok) or the claude-code version (Claude) in the Dockerfile and redeploy. The error below names the minimum version."
+             ledger_status=failed ;;
     AUTH)    subj="⚠️ Grant Wire Scout AUTH — ${LANE} credentials rejected ($WIRE/$VARIANT); $AUTH_HINT"
              hint="The CLI rejected its credentials. $AUTH_HINT. The hydrate_grok_auth lines below (Grok) say whether the on-disk token was live or expired." ;;
     QUOTA)   subj="⚠️ Grant Wire Scout QUOTA — ${LANE} usage cap hit ($WIRE/$VARIANT)"
@@ -102,7 +107,7 @@ if [ "$rc" -ne 0 ]; then
     echo "--- last 40 lines of the run log ---"
     printf '%s\n' "$out" | tail -40
   } | alert "$subj"
-  ledger "$(printf '%s' "$cls" | tr 'A-Z' 'a-z')" "$cls"
+  ledger "$ledger_status" "$cls"
   exit "$rc"
 fi
 

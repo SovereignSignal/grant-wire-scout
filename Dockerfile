@@ -14,11 +14,15 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.195
 
 # Grok Build CLI — the parallel grok-scout service runs headless `grok -p`. PINNED the same
 # way as Claude. Bump by changing GROK_CLI_VERSION (https://x.ai/cli/stable).
+# xAI enforces a server-side MINIMUM version: on 2026-10-02 the API began answering 1.0.5
+# with `426 Upgrade Required` (needs >= 1.0.13) and every wire failed in 2s. A pin ages
+# out, so when the scout mails "CLI OUTDATED", bump this line. 1.0.41 is the version the
+# producer's exact flag set and JSON envelope were re-checked against.
 ENV HOME=/app/home \
     GROK_BIN_DIR=/usr/local/bin \
     GROK_DISABLE_AUTOUPDATER=1 \
     GROK_HOME=/app/home/.grok \
-    GROK_CLI_VERSION=1.0.5
+    GROK_CLI_VERSION=1.0.41
 RUN mkdir -p "$HOME" "$GROK_HOME" \
  && curl -fsSL https://x.ai/cli/install.sh | bash -s "$GROK_CLI_VERSION" \
  && grok --version
