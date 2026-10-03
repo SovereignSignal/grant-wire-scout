@@ -165,6 +165,8 @@ run_case ok
 [ "$CASE_RC" -eq 0 ] && ok "rc=0" || { printf '%s\n' "$CASE_OUT" | tail -15; bad "happy rc=$CASE_RC"; }
 [ -s "$CAP/submit.json" ] && ok "delivered to Wire Room" || bad "no submit captured"
 [ -z "$(alerts)" ] && ok "no alert fired" || bad "unexpected alert: $(alerts)"
+printf '%s\n' "$CASE_OUT" | grep -q '\[grok\] cli version' \
+  && bad "claude run logged a grok cli version" || ok "claude run does not touch the grok cli"
 
 echo "== B timeout, nothing flushed -> rc=124 + TIMEOUT alert =="
 run_case slow SCOUT_PRODUCER_TIMEOUT=2 STUB_SLEEP=5

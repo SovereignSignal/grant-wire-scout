@@ -355,6 +355,21 @@ cat > "$TMP/bin/grok" <<'PY'
 import os, sys, json
 mode = os.environ.get("GROK_STUB_MODE", "ok")
 base = os.environ.get("MOCK_BASE", "http://127.0.0.1")
+args = sys.argv[1:]
+# ensure-grok-cli.sh calls `grok version` and `grok update` before the hunt.
+# Those are not producer calls and must not increment GROK_STUB_CALLS.
+if args[:1] == ["version"] or "--version" in args:
+    sys.stdout.write(os.environ.get("GROK_STUB_VERSION", "1.0.41") + "\n")
+    sys.exit(0)
+if args[:1] == ["update"]:
+    uf = os.environ.get("GROK_STUB_UPDATES")
+    if uf:
+        with open(uf, "a") as fh:
+            fh.write(" ".join(args) + "\n")
+    if os.environ.get("GROK_STUB_UPDATE") == "fail":
+        sys.stderr.write("stub update failed\n")
+        sys.exit(1)
+    sys.exit(0)
 def out(text, **x):
     d = {"text": text, "stopReason": "EndTurn", "sessionId": "e2e", "requestId": "r"}
     d.update(x); sys.stdout.write(json.dumps(d))
@@ -416,6 +431,14 @@ if mode == "oss-truncated":
     if is_oss: truncated()
     out(json.dumps(ok_payload("Grok Crypto Grant"))); sys.exit(0)
 # 2026-09-10 production shape: complete finds, no top-level producer, CLI rc=1.
+OUTDATED = ("API error (status 426 Upgrade Required): Your Grok CLI version (1.0.5) is outdated. "
+            "Please update to version 1.0.13 or later via `grok update` or the installation documentation.")
+if mode == "outdated-then-ok":
+    if n <= 1:
+        out(OUTDATED, stopReason="Error"); sys.exit(1)
+    out(json.dumps(ok_payload("Grok Updated Grant"))); sys.exit(0)
+if mode == "outdated-always":
+    out(OUTDATED, stopReason="Error"); sys.exit(1)
 if mode == "no-meta":
     p = {"opportunities": [{"name": "Grok No-Meta Grant", "source_url": base + "/g1",
              "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31",
@@ -573,7 +596,7 @@ grok_env(){ # $1=stub mode, rest = extra env
      SCOUT_ENGINE=grok GROK_MODEL=stub GROK_HOME="$TMP/grokhome" \
      GROK_AUTH_JSON='{"access_token":"test"}' "$@"
 }
-reset_cap(){ rm -f "$CAP/submit.json" "$CAP/alerts.log" "$CAP/calls" "$CAP"/calls.argv.*; }
+reset_cap(){ rm -f "$CAP/submit.json" "$CAP/alerts.log" "$CAP/calls" "$CAP/updates" "$CAP"/calls.argv.*; }
 
 echo "== 9. max_tokens_truncation -> retry once at low reasoning effort, deliver, no alert =="
 reset_cap
@@ -670,6 +693,156 @@ d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
 grep -q "TIMEOUT" "$CAP/alerts.log" 2>/dev/null && ok "empty resume flush alerts TIMEOUT" \
   || bad "empty resume flush alert: $(cat "$CAP/alerts.log" 2>/dev/null)"
 [ ! -s "$CAP/submit.json" ] && ok "empty resume flush delivered nothing" || bad "empty resume flush submitted"
+
+echo "== 15. 426 outdated -> upgrade CLI and retry the wire once =="
+reset_cap
+CASE_OUT="$(grok_env outdated-then-ok GROK_STUB_UPDATES="$CAP/updates" \
+   "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -eq 0 ] && ok "426 then upgrade rc=0" \
+  || { printf '%s\n' "$CASE_OUT" | tail -30; bad "426 then upgrade rc=$CASE_RC"; }
+[ "$(cat "$CAP/calls" 2>/dev/null)" = "2" ] && ok "426 retries the producer exactly once" \
+  || bad "producer calls after 426: $(cat "$CAP/calls" 2>/dev/null) (want 2)"
+[ "$(grep -c . "$CAP/updates" 2>/dev/null || echo 0)" = "2" ] && ok "cli update ran before the hunt and again on retry" \
+  || bad "update log: $(cat "$CAP/updates" 2>/dev/null)"
+tail -1 "$CAP/updates" | grep -q -- "--force-reinstall" \
+  && ok "426 retry force-reinstalls the CLI" || bad "retry update was not --force-reinstall: $(cat "$CAP/updates" 2>/dev/null)"
+printf '%s\n' "$CASE_OUT" | grep -q '\[grok\] cli version ' && ok "run logs [grok] cli version" \
+  || bad "missing cli version line"
+printf '%s\n' "$CASE_OUT" | grep -q "retrying this wire once" && ok "logged the one retry" \
+  || bad "retry log line missing"
+[ -s "$CAP/submit.json" ] && ok "retry after upgrade delivered" || bad "426 retry did not submit"
+[ -z "$(cat "$CAP/alerts.log" 2>/dev/null || true)" ] && ok "successful 426 retry fired no alert" \
+  || bad "426 retry alerted: $(cat "$CAP/alerts.log")"
+
+echo "== 16. 426 on both attempts -> one retry, then UPGRADE alert =="
+reset_cap
+CASE_OUT="$(grok_env outdated-always GROK_STUB_UPDATES="$CAP/updates" \
+   "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -ne 0 ] && ok "double 426 rc!=0" || bad "double 426 returned rc=0"
+[ "$(cat "$CAP/calls" 2>/dev/null)" = "2" ] && ok "426 retry is bounded to one extra call" \
+  || bad "producer calls: $(cat "$CAP/calls" 2>/dev/null) (want 2)"
+grep -q "OUTDATED" "$CAP/alerts.log" 2>/dev/null && ok "double 426 alerts OUTDATED" \
+  || bad "double 426 alert: $(cat "$CAP/alerts.log" 2>/dev/null)"
+[ ! -s "$CAP/submit.json" ] && ok "double 426 delivered nothing" || bad "double 426 submitted"
+
+echo "== 17. cli update failure is logged and the hunt still runs =="
+reset_cap
+CASE_OUT="$(grok_env ok GROK_STUB_UPDATE=fail GROK_CLI_INSTALL_CMD='exit 1' \
+   "$TMP/bin/bash" "$ROOT/bin/run-scout.sh" crypto A 2>&1)"; CASE_RC=$?
+d="$(printf '%s\n' "$CASE_OUT" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+[ "$CASE_RC" -eq 0 ] && ok "failed cli update still delivers" \
+  || { printf '%s\n' "$CASE_OUT" | tail -25; bad "failed cli update rc=$CASE_RC"; }
+printf '%s\n' "$CASE_OUT" | grep -q '\[grok\] cli version ' && ok "version logged when update fails" \
+  || bad "version missing on failed update"
+printf '%s\n' "$CASE_OUT" | grep -q "cli update failed" && ok "update failure is logged" \
+  || bad "update failure was not logged"
+[ -s "$CAP/submit.json" ] && ok "hunt ran after the failed update" || bad "hunt did not run after failed update"
+
+echo "== 18. ensure-grok-cli.sh: version line, upgrade, timeout =="
+SLOW="$TMP/slowbin"; mkdir -p "$SLOW"
+cat > "$SLOW/grok" <<'PY'
+#!/usr/bin/env python3
+import os, sys, time
+state = os.environ.get("GROK_VER_STATE", "")
+kind = sys.argv[1] if len(sys.argv) > 1 else ""
+if kind == "version" or "--version" in sys.argv:
+    if state and os.path.exists(state):
+        sys.stdout.write(open(state).read().strip() + "\n")
+    else:
+        sys.stdout.write("1.0.5\n")
+    sys.exit(0)
+if kind == "update":
+    if os.environ.get("SLOW_UPDATE") == "1":
+        time.sleep(30)
+    if state:
+        open(state, "w").write("9.9.9\n")
+    sys.exit(0)
+sys.exit(1)
+PY
+chmod +x "$SLOW/grok"
+STATE="$TMP/verstate"
+rm -f "$STATE"
+UP_OUT="$(PATH="/usr/bin:/bin" GROK="$SLOW/grok" GROK_VER_STATE="$STATE" \
+   "$ROOT/bin/ensure-grok-cli.sh" 2>&1)"; UP_RC=$?
+[ "$UP_RC" -eq 0 ] && ok "ensure exits 0 after a successful update" || bad "ensure rc=$UP_RC"
+printf '%s\n' "$UP_OUT" | grep -qx '\[grok\] cli version 1.0.5' \
+  && ok "logs the version at start" || bad "start version line: $UP_OUT"
+printf '%s\n' "$UP_OUT" | grep -qx '\[grok\] cli version 9.9.9' \
+  && ok "logs the version after it changes" || bad "updated version line: $UP_OUT"
+T0="$(date +%s)"
+SLOW_OUT="$(PATH="/usr/bin:/bin" GROK="$SLOW/grok" GROK_VER_STATE="$STATE" SLOW_UPDATE=1 \
+   GROK_CLI_UPDATE_TIMEOUT=1 GROK_CLI_INSTALL_CMD='exit 1' \
+   "$ROOT/bin/ensure-grok-cli.sh" 2>&1)"; SLOW_RC=$?
+ELAPSED="$(( $(date +%s) - T0 ))"
+[ "$SLOW_RC" -eq 0 ] && ok "timed-out update still exits 0" || bad "slow ensure rc=$SLOW_RC"
+[ "$ELAPSED" -lt 20 ] && ok "update timeout fired (${ELAPSED}s)" || bad "update timeout did not fire (${ELAPSED}s)"
+printf '%s\n' "$SLOW_OUT" | grep -q "cli update failed" && ok "timeout is logged as an update failure" \
+  || bad "timeout log: $SLOW_OUT"
+printf '%s\n' "$SLOW_OUT" | grep -q "install script also failed" && ok "install fallback failure is logged" \
+  || bad "install fallback log missing: $SLOW_OUT"
+
+echo "== 19. model defaults and an unpinned Grok CLI in the image =="
+grep -q 'GROK_CLI_VERSION' "$ROOT/Dockerfile" && bad "Dockerfile still pins GROK_CLI_VERSION" \
+  || ok "Dockerfile has no GROK_CLI_VERSION pin"
+grep -q 'install.sh | bash -s' "$ROOT/Dockerfile" && bad "install.sh is still passed a version" \
+  || ok "image install.sh takes no version argument"
+grep -q 'https://x.ai/cli/install.sh | bash' "$ROOT/Dockerfile" \
+  && ok "image build installs the latest Grok CLI" || bad "installer line missing"
+grep -q '@anthropic-ai/claude-code@2.1.288' "$ROOT/Dockerfile" \
+  && ok "Claude CLI pin is 2.1.288 (can select Opus 5.5)" || bad "Claude CLI pin is not 2.1.288"
+grep -F -q 'MODEL="${MODEL:-claude-opus-5-5}"' "$ROOT/bin/run-scout.sh" \
+  && ok "run-scout Claude default is claude-opus-5-5" || bad "run-scout Claude default drifted"
+grep -F -q 'MODEL="${GROK_MODEL:-grok-4.7}"' "$ROOT/bin/run-scout.sh" \
+  && ok "run-scout Grok default is grok-4.7" || bad "run-scout Grok default drifted"
+grep -F -q 'GROK_MODEL="${GROK_MODEL:-grok-4.7}"' "$ROOT/bin/run-grok-all.sh" \
+  && ok "run-grok-all default is grok-4.7" || bad "run-grok-all default drifted"
+grep -F -q 'MODEL=claude-opus-5-5' "$ROOT/.env.example" && grep -F -q 'GROK_MODEL=grok-4.7' "$ROOT/.env.example" \
+  && ok ".env.example models match" || bad ".env.example models drifted"
+mout="$(env -u MODEL -u GROK_MODEL -u SCOUT_ENGINE SCOUT_PRIME_KNOWN=0 \
+   "$ROOT/run-producer.sh" --wire crypto --variant A --render-only 2>&1)"
+d="$(printf '%s\n' "$mout" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+printf '%s\n' "$mout" | grep -q 'model=claude-opus-5-5' \
+  && ok "producer Claude default logs claude-opus-5-5" || bad "claude model line: $(printf '%s\n' "$mout" | grep model= || true)"
+printf '%s\n' "$mout" | grep -q '\[grok\] cli version' \
+  && bad "claude render-only touched the grok cli" || ok "claude render-only does not update grok"
+mout="$(env -u MODEL -u GROK_MODEL SCOUT_ENGINE=grok SCOUT_PRIME_KNOWN=0 \
+   "$ROOT/run-producer.sh" --wire crypto --variant A --engine grok --render-only 2>&1)"
+d="$(printf '%s\n' "$mout" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+printf '%s\n' "$mout" | grep -q 'model=grok-4.7' \
+  && ok "producer Grok default logs grok-4.7" || bad "grok model line: $(printf '%s\n' "$mout" | grep model= || true)"
+mout="$(env MODEL=claude-sonnet-4-6 SCOUT_PRIME_KNOWN=0 \
+   "$ROOT/run-producer.sh" --wire crypto --variant A --render-only 2>&1)"
+d="$(printf '%s\n' "$mout" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+printf '%s\n' "$mout" | grep -q 'model=claude-sonnet-4-6' \
+  && ok "MODEL env still overrides the Claude default" || bad "MODEL override ignored"
+mout="$(env -u MODEL GROK_MODEL=grok-4.6 SCOUT_ENGINE=grok SCOUT_PRIME_KNOWN=0 \
+   "$ROOT/run-producer.sh" --wire crypto --variant A --engine grok --render-only 2>&1)"
+d="$(printf '%s\n' "$mout" | sed -n 's/^RUN_DIR=//p' | tail -1)"
+[ -n "$d" ] && RUN_DIRS+=("$d")
+printf '%s\n' "$mout" | grep -q 'model=grok-4.6' \
+  && ok "GROK_MODEL env still overrides the Grok default" || bad "GROK_MODEL override ignored"
+# ensure-grok-cli.sh is only invoked from the Grok branch of the producer.
+python3 - "$ROOT/run-producer.sh" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+start = text.find('if [[ "$ENGINE" == "grok" ]]; then\n  python3')
+rest = text[start:]
+else_at = rest.find("\nelse\n")
+grok_branch = rest[:else_at]
+claude_branch = rest[else_at:]
+ok = "ensure-grok-cli.sh" in grok_branch and "ensure-grok-cli.sh" not in claude_branch
+sys.exit(0 if ok else 1)
+PY
+[ $? -eq 0 ] && ok "grok cli update is not on the Claude producer path" \
+  || bad "ensure-grok-cli.sh is not confined to the Grok branch"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"

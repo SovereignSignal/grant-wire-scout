@@ -84,7 +84,9 @@ oss** (variant A). Submits
 Auth is `GROK_AUTH_JSON` (contents of `~/.grok/auth.json` from `grok login`) — subscription,
 not `XAI_API_KEY` unless you want an API bill. Access tokens last ~6h; persist the refreshed
 session on a volume at `/app/grok-session` (`GROK_HOME`). Default model is
-`grok-4.6` (current Grok Build flagship); set `GROK_MODEL=grok-4.7` when it ships.
+`grok-4.7`. The image installs the latest Grok CLI, and each wire runs `grok update`
+before the hunt (120s cap). A 426 / outdated response upgrades the CLI and retries
+that wire once. Claude stays on its pinned CLI and on Claude.
 
 See [DEPLOY.md](DEPLOY.md) for the third-service checklist. Claude cron stays on
 `railway.toml` if you never add the Grok service.
@@ -101,14 +103,19 @@ it does not make direct API calls. The local validation run on M5 used the same 
 Because runs ride the subscription, `total_cost_usd` in the run envelope is
 **accounting cost-equivalent, not a charge**. The real constraint is the Max plan's
 **usage limits** (5-hour + weekly), and those are **shared with interactive Claude Code
-sessions**. At full scale — 3 wires × 2 variants × daily, each ~$1.50-equivalent on Opus
-— a scheduled producer is a meaningful fraction of the weekly Opus allowance and could
-blow the cap, breaking interactive work.
+sessions**, and Opus has its own cap on top of that shared window.
 
-Therefore: **default the producer to Sonnet** (≈5× cheaper in quota terms, plenty for
-grant discovery), keep Opus available for interactive sessions, and promote to Opus only
-for individual high-value runs. The `--model` flag on `run-producer.sh` makes this a
-per-run choice; the Hermes cron job should pin Sonnet.
+The Claude cron defaults to **Opus 5.5** (`claude-opus-5-5`). List price is $4 / $20
+per million input / output tokens, cache reads $0.20, against Sonnet 4.6 at $3 / $15.
+The accounting figure is about a third higher. On Max, Opus draws the shared 5-hour
+and weekly allowance faster than Sonnet (Anthropic's guidance: several times more of
+the plan per turn), and thinking is always on at the default effort `medium`, billed
+as output. This lane is 3 wires, 4 days a week, up to 100 turns each, so it can take
+a real share of the weekly allowance and can trip the Opus cap while Sonnet would
+still have headroom. Fast mode ($8 / $40) is not enabled. Set `MODEL=claude-sonnet-4-6`
+on the Claude service to step back. Grok 4.7 is the same price and speed as Grok 4.6
+($2 / $6 per million input / output tokens). The `--model` flag on `run-producer.sh`
+overrides either default for one run.
 
 ## Deployment
 

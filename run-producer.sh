@@ -14,9 +14,8 @@
 # Environment:
 #   SCOUT_ENGINE      claude (default) | grok
 #   CLAUDE / GROK     binary overrides
-#   MODEL             Claude default: claude-sonnet-4-6
-#   GROK_MODEL        Grok default: grok-4.6 (Grok Build flagship as of 2026-08-12;
-#                     set grok-4.7 when it ships — independent of Claude's MODEL)
+#   MODEL             Claude default: claude-opus-5-5 (Opus 5.5; needs Claude Code >= 2.1.280)
+#   GROK_MODEL        Grok default: grok-4.7 (independent of Claude's MODEL)
 #   GROK_AUTH_JSON    contents of ~/.grok/auth.json from `grok login` (subscription)
 #   XAI_API_KEY       console.x.ai key (API bill fallback; not the grok.com path)
 #   WIRE_ROOM_API / INTERNAL_API_KEY   optional seen-url dedup
@@ -110,7 +109,7 @@ TIME_BUDGET="You have a HARD wall-clock budget of about ${TIME_BUDGET_MIN} minut
 if [[ "$ENGINE" == "grok" ]]; then
   PRODUCER="grok-build"
   PRODUCER_LABEL="Grok Build Grant Producer"
-  MODEL="${MODEL_FLAG:-${GROK_MODEL:-grok-4.6}}"
+  MODEL="${MODEL_FLAG:-${GROK_MODEL:-grok-4.7}}"
   DISCOVERED_VIA="x_search"
   DISCOVERY_METHOD="1. **Discover (X-first, then the open web).** Your edge is a different search index than Claude WebSearch — start on X, then confirm at the canonical page:
    - Run many X searches (keyword + semantic) for programs announced or opened in the last ~2 weeks: \"${WIRE} grant\", \"${WIRE} RFP open\", \"applications open\", \"fellowship deadline\". Prefer official/first-party posts over recaps.
@@ -121,7 +120,7 @@ if [[ "$ENGINE" == "grok" ]]; then
 else
   PRODUCER="claude-code"
   PRODUCER_LABEL="Claude Code Grant Producer"
-  MODEL="${MODEL_FLAG:-${MODEL:-claude-sonnet-4-6}}"
+  MODEL="${MODEL_FLAG:-${MODEL:-claude-opus-5-5}}"
   DISCOVERED_VIA="web_search"
   DISCOVERY_METHOD="1. **Discover (hunt fresh + niche; dig past the obvious).** Run MANY targeted WebSearches — do NOT stop at the first prominent results, which are the famous standing programs everyone already knows. Tilt hard toward RECENCY and NOVELTY:
    - Recency queries: \"${WIRE} grant announced 2026\", \"new ${WIRE} RFP open\", \"${WIRE} funding just launched\", \"${WIRE} grant deadline 2026\" — and bias every search toward results dated within ~2 weeks of ${TODAY}.
@@ -226,6 +225,11 @@ producer_rc=0
 if [[ "$ENGINE" == "grok" ]]; then
   python3 "${PRODUCER_ROOT}/lib/hydrate_grok_auth.py"
   GROK_BIN="${GROK:-grok}"
+  # Latest CLI before the hunt. A failed update is logged and the hunt still runs;
+  # run-scout.sh retries this wire once if the API answers 426 / outdated.
+  # `||` so a non-zero helper cannot trip `set -e` (the helper itself exits 0).
+  GROK="$GROK_BIN" "${PRODUCER_ROOT}/bin/ensure-grok-cli.sh" \
+    || echo "[grok] cli update helper failed — continuing with the installed CLI" >&2
   # Headless: --always-approve is required (without it, tool calls are auto-cancelled).
   # --no-auto-update keeps stdout clean. Do NOT pass --sandbox workspace on Railway:
   # Grok CLI 1.0.5 shells out to bubblewrap and REFUSES to start if bwrap is missing
