@@ -24,7 +24,7 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
      ⚠️ `railway.toml` did NOT auto-apply on first deploy here — set these in the UI (or via API)
      to be sure, otherwise it runs as an always-on service and crash-loops.
    - **Variables:** `WIRE_ROOM_API`, `INTERNAL_API_KEY`, `RESEND_API_KEY`, `NOTIFICATION_EMAIL`,
-     `ALERT_FROM` (a Resend-verified sender), `MODEL=claude-sonnet-4-6`, `CLAUDE_CODE_OAUTH_TOKEN`
+     `ALERT_FROM` (a Resend-verified sender), `MODEL=claude-opus-5-5`, `CLAUDE_CODE_OAUTH_TOKEN`
      (from `claude setup-token`). Optionally `SCOUT_WIRES=crypto` to start conservative.
    - **No volume.** Do not set `SCOUT_ENGINE` — default is `claude`.
 
@@ -53,8 +53,9 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
      Hydrate keeps that on-disk session unless you put a *newer* `GROK_AUTH_JSON` (re-login).
      When the lane AUTH-alerts anyway, re-run `grok login` and replace the env var.
      Do **not** set `XAI_API_KEY` unless you accept a console.x.ai API bill.
-   - `GROK_MODEL=grok-4.6` (Grok Build flagship as of 2026-08-12). Flip to `grok-4.7` the day
-     it ships in Grok Build — do not leave a 4.7 default that the CLI cannot resolve.
+   - `GROK_MODEL=grok-4.7` (Grok Build, same `--model` id the CLI already used for 4.6).
+     If this variable is already set on the service, the old value overrides the code default —
+     set it to `grok-4.7`. Same for `MODEL=claude-opus-5-5` on the Claude scout.
    - Wires: `SCOUT_WIRES=crypto ai oss` (same set as Claude). Script pins `SCOUT_VARIANTS=A`.
    - Cadence splits the week so both lanes are not burning quota every night: Claude
      Sun/Tue/Thu/Sat 04:00 UTC, Grok Mon/Wed/Fri 06:00 UTC. Grok's edge is X-first
@@ -119,6 +120,12 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
   the `SCOUT_KNOWN_LIMIT` cap (400 names): a thin wire told "everything is known" hunts
   until the clock runs out. If it repeats, lower `SCOUT_KNOWN_LIMIT` on that lane or raise
   the cap. `SCOUT_SESSION_RESUME=0` restores the old no-resume behaviour.
+- **Grok CLI version:** the image installs the latest stable Grok CLI at build (no version
+  pin). Before each Grok wire, `bin/ensure-grok-cli.sh` runs `grok update` with a timeout
+  (`GROK_CLI_UPDATE_TIMEOUT`, default 120s). A failed update is logged and the hunt still
+  runs. If the API answers 426 / "outdated", that wire force-reinstalls the CLI and retries
+  once. Claude does not do this. It stays on the pinned `@anthropic-ai/claude-code`
+  package (2.1.288). Opus 5.5 needs that package at 2.1.280 or newer.
 - **Grok `EMPTY` on a thin wire (oss):** Grok CLI 1.0.5 can hit its per-response output
   cap on the final turn (reasoning eats the budget before the JSON is written) and return
   `"error_kind": "max_tokens_truncation"` with no payload. The producer retries that once at

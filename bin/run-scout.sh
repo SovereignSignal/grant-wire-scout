@@ -3,8 +3,8 @@
 # to the Wire Room queue, and email an ops alert ONLY on failure (silence = healthy).
 #
 # Usage: run-scout.sh <crypto|ai|oss> <A|B>
-# Env: SCOUT_ENGINE (claude|grok, default claude); MODEL (Claude default claude-sonnet-4-6);
-#      GROK_MODEL (Grok default grok-4.6); WIRE_ROOM_API + INTERNAL_API_KEY (delivery);
+# Env: SCOUT_ENGINE (claude|grok, default claude); MODEL (Claude default claude-opus-5-5);
+#      GROK_MODEL (Grok default grok-4.7); WIRE_ROOM_API + INTERNAL_API_KEY (delivery);
 #      RESEND_API_KEY + NOTIFICATION_EMAIL + ALERT_FROM (alerts).
 set -uo pipefail
 
@@ -15,12 +15,12 @@ ENGINE="${SCOUT_ENGINE:-claude}"
 TODAY="$(date -u +%Y-%m-%d)"
 
 if [ "$ENGINE" = "grok" ]; then
-  MODEL="${GROK_MODEL:-grok-4.6}"
+  MODEL="${GROK_MODEL:-grok-4.7}"
   export SCOUT_SCAN_SOURCE="${SCOUT_SCAN_SOURCE:-grok-scout}"
   LANE="Grok Build"
   AUTH_HINT="refresh GROK_AUTH_JSON from \`grok login\` (~/.grok/auth.json) or set XAI_API_KEY"
 else
-  MODEL="${MODEL:-claude-sonnet-4-6}"
+  MODEL="${MODEL:-claude-opus-5-5}"
   export SCOUT_SCAN_SOURCE="${SCOUT_SCAN_SOURCE:-claude-code}"
   LANE="Claude Code"
   AUTH_HINT="run: claude setup-token"
@@ -64,13 +64,38 @@ if [ "$skip_rc" -eq 2 ]; then
 fi
 
 # 1. discover -> verify -> report
-out="$("$ROOT/run-producer.sh" --wire "$WIRE" --variant "$VARIANT" --engine "$ENGINE" --model "$MODEL" 2>&1)"; rc=$?
-printf '%s\n' "$out"
-run_dir="$(printf '%s\n' "$out" | sed -n 's/^RUN_DIR=//p' | tail -1)"
-run_dir="${run_dir%/}"
-if [ -z "$run_dir" ]; then
-  run_dir="$(ls -dt "$ROOT/runs/$WIRE/$VARIANT"/*/ 2>/dev/null | head -1)"
+invoke_producer() {
+  out="$("$ROOT/run-producer.sh" --wire "$WIRE" --variant "$VARIANT" --engine "$ENGINE" --model "$MODEL" 2>&1)"; rc=$?
+  printf '%s\n' "$out"
+  run_dir="$(printf '%s\n' "$out" | sed -n 's/^RUN_DIR=//p' | tail -1)"
   run_dir="${run_dir%/}"
+  if [ -z "$run_dir" ]; then
+    run_dir="$(ls -dt "$ROOT/runs/$WIRE/$VARIANT"/*/ 2>/dev/null | head -1)"
+    run_dir="${run_dir%/}"
+  fi
+}
+
+grok_cli_retried=0
+invoke_producer
+
+# Grok only. A 426 / "outdated" response upgrades the CLI and retries this wire once.
+# Claude stays on its pinned binary and alerts from the UPGRADE branch below.
+if [ "$ENGINE" = "grok" ] && [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ]; then
+  cls_now="$(python3 "$ROOT/lib/classify_failure.py" "${run_dir:-}/raw.json" 2>/dev/null || echo OTHER)"
+  if [ "$cls_now" != "UPGRADE" ] && [ -n "${run_dir:-}" ] && [ -f "$run_dir/producer.stderr" ]; then
+    cls_now="$(python3 "$ROOT/lib/classify_failure.py" "$run_dir/producer.stderr" 2>/dev/null || echo OTHER)"
+  fi
+  # The phrase is specific. Do not also match "cli version" + "outdated" on this combined
+  # log: every Grok run prints `[grok] cli version …`, so that pair would false-trigger.
+  if [ "$cls_now" != "UPGRADE" ] && printf '%s\n' "$out" | grep -qi "426 upgrade required"; then
+    cls_now=UPGRADE
+  fi
+  if [ "$cls_now" = "UPGRADE" ]; then
+    echo "[grok] vendor refused this CLI (426/outdated) — upgrading and retrying this wire once"
+    export GROK_CLI_FORCE_UPDATE=1
+    grok_cli_retried=1
+    invoke_producer
+  fi
 fi
 
 if [ "$rc" -ne 0 ]; then
@@ -84,8 +109,13 @@ if [ "$rc" -ne 0 ]; then
   # Ledger status stays inside ledger.py's known set; error_class carries the detail.
   ledger_status="$(printf '%s' "$cls" | tr 'A-Z' 'a-z')"
   case "$cls" in
-    UPGRADE) subj="⚠️ Grant Wire Scout CLI OUTDATED — ${LANE} refused by the vendor API ($WIRE/$VARIANT); bump the pinned CLI version"
-             hint="The vendor API rejected this CLI build as too old (426 Upgrade Required). Every wire on this lane fails the same way until the pin moves: raise GROK_CLI_VERSION (Grok) or the claude-code version (Claude) in the Dockerfile and redeploy. The error below names the minimum version."
+    UPGRADE) if [ "$ENGINE" = "grok" ]; then
+               subj="⚠️ Grant Wire Scout CLI OUTDATED — Grok Build still refused after a CLI update and one retry ($WIRE/$VARIANT)"
+               hint="The vendor API rejected this CLI build (426 Upgrade Required). This wire already ran \`grok update\` before the hunt and once more (\`--force-reinstall\`) after the 426. Both update errors are in the log below. If this repeats, the container cannot reach https://x.ai/cli, or the published CLI is still older than the minimum named in the error."
+             else
+               subj="⚠️ Grant Wire Scout CLI OUTDATED — ${LANE} refused by the vendor API ($WIRE/$VARIANT); bump the pinned CLI version"
+               hint="The vendor API rejected this CLI build as too old (426 Upgrade Required). Raise the claude-code version in the Dockerfile and redeploy. The error below names the minimum version."
+             fi
              ledger_status=failed ;;
     AUTH)    subj="⚠️ Grant Wire Scout AUTH — ${LANE} credentials rejected ($WIRE/$VARIANT); $AUTH_HINT"
              hint="The CLI rejected its credentials. $AUTH_HINT. The hydrate_grok_auth lines below (Grok) say whether the on-disk token was live or expired." ;;
@@ -103,6 +133,10 @@ if [ "$rc" -ne 0 ]; then
     echo "run_dir: ${run_dir:-?}"
     echo
     echo "$hint"
+    if [ "${grok_cli_retried:-0}" = "1" ]; then
+      echo
+      echo "This wire was retried once after a Grok CLI upgrade attempt (426/outdated)."
+    fi
     echo
     echo "--- last 40 lines of the run log ---"
     printf '%s\n' "$out" | tail -40
