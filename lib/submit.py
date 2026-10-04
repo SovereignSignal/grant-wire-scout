@@ -28,6 +28,8 @@ import urllib.request
 import urllib.error
 from urllib.parse import urlparse
 
+import validate
+
 DEFAULT_SOURCE = "claude-code"  # heartbeat watches this unless SCOUT_SCAN_SOURCE is set
 
 # Retry only transient delivery failures (rate-limit / gateway / network). Permanent 4xx
@@ -42,6 +44,42 @@ class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
     never legitimately redirects, so we treat any 3xx as a delivery failure."""
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise urllib.error.HTTPError(req.full_url, code, f"refusing redirect to {newurl!r}", headers, fp)
+
+
+def opportunities_for_submit(opps):
+    """Items the Wire Room should receive.
+
+    Each kept object has integer `area` 1-6. Open programs (area 3) are GRANT;
+    every other area is NEWS so grants.watch does not treat it as an open program.
+    """
+    if not isinstance(opps, list):
+        return []
+    kept = []
+    for o in opps:
+        if not isinstance(o, dict):
+            continue
+        item, reason = validate.prepare_opportunity(o)
+        if item is None:
+            print(f"submit: dropping {o.get('name')!r}: {reason}", file=sys.stderr)
+            continue
+        errs = validate.item_errors(item)
+        if errs:
+            print(f"submit: dropping {o.get('name')!r}: {'; '.join(errs)}", file=sys.stderr)
+            continue
+        kept.append(item)
+    return kept
+
+
+def build_submission_body(opps, wire, variant, scan_date, source):
+    """JSON body for POST /api/scan/submit. rawText is the opportunities array."""
+    delivered = opportunities_for_submit(opps)
+    return {
+        "wire": wire,
+        "promptVariant": variant,            # 'A' | 'B'
+        "scanDate": scan_date,               # YYYY-MM-DD
+        "source": source,
+        "rawText": json.dumps({"opportunities": delivered}),
+    }, delivered
 
 
 def main(opps_path, wire, variant, scan_date, api_base=None):
@@ -65,14 +103,11 @@ def main(opps_path, wire, variant, scan_date, api_base=None):
         return 0
 
     source = os.environ.get("SCOUT_SCAN_SOURCE", DEFAULT_SOURCE)
-
-    body = json.dumps({
-        "wire": wire,
-        "promptVariant": variant,            # 'A' | 'B'
-        "scanDate": scan_date,               # YYYY-MM-DD
-        "source": source,
-        "rawText": json.dumps({"opportunities": opps}),
-    }).encode()
+    body_obj, opps = build_submission_body(opps, wire, variant, scan_date, source)
+    if not opps:
+        print(f"submit: no area 1-6 opportunities in {opps_path} — nothing to deliver (not an error)")
+        return 0
+    body = json.dumps(body_obj).encode()
 
     req = urllib.request.Request(
         f"{api_base}/api/scan/submit",

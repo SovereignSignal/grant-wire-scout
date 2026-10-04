@@ -18,13 +18,17 @@ VARIANTS = {"A", "B"}
 WIRES = {"crypto", "ai", "oss"}
 CLASSIFICATIONS = {"GRANT", "EXPIRED", "NEWS", "NOISE"}
 REJECT_CLASS = {"EXPIRED", "NEWS", "NOISE", "DUPLICATE"}
+# Wire areas 1-6. Area 3 is the only open program; GRANT is reserved for it so
+# grants.watch does not ingest awards, governance, incentives, commentary, or tools.
+WIRE_AREAS = {1, 2, 3, 4, 5, 6}
+OPEN_PROGRAM_AREA = 3
 DISCOVERED_VIA = {
     "web_search", "web_fetch", "source_list",
     "x_search", "x_keyword_search", "x_semantic_search",
 }
 REQUIRED_ITEM = (
     "name", "source_url", "wire", "amount", "deadline", "summary",
-    "classification", "fit_score", "fit_reason", "evidence", "discovered_via",
+    "area", "classification", "fit_score", "fit_reason", "evidence", "discovered_via",
 )
 
 
@@ -36,10 +40,71 @@ def _url_ok(u) -> bool:
     return p.scheme in ("http", "https") and bool(p.netloc)
 
 
+def coerce_area(value):
+    """Return 1-6, 'out', or None. Numeric strings and 'area 3' count; bools do not."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        if value in WIRE_AREAS:
+            return value
+        if value == 0:
+            return "out"
+        return None
+    if isinstance(value, float) and value == int(value):
+        return coerce_area(int(value))
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in {"out", "outside"}:
+            return "out"
+        if s.isdigit():
+            return coerce_area(int(s))
+        if len(s) > 5 and s.startswith("area ") and s[5:].strip().isdigit():
+            return coerce_area(int(s[5:].strip()))
+    return None
+
+
+def prepare_opportunity(o: dict) -> tuple[dict | None, str | None]:
+    """Normalize one opportunity for the wire.
+
+    GRANT is only area 3 (an open program). Other accepted areas are NEWS so
+    grants.watch, which keys off GRANT, does not ingest them. Returns
+    (item, None) to keep or (None, reason) to reject.
+    """
+    if not isinstance(o, dict):
+        return None, "not an object"
+    item = dict(o)
+    area = coerce_area(item.get("area"))
+    if area == "out":
+        return None, "area out: OUT list is rejected"
+    if area is None:
+        return None, f"area {item.get('area')!r} is not 1-6"
+    item["area"] = area
+    cls = item.get("classification")
+    if area == OPEN_PROGRAM_AREA:
+        if cls in ("EXPIRED", "NOISE"):
+            return None, f"open program (area 3) classified {cls}"
+        item["classification"] = "GRANT"
+        return item, None
+    if cls == "NOISE":
+        return None, "classification NOISE"
+    if cls in ("GRANT", "EXPIRED", None, ""):
+        # A closed round's published result is area 2, not an expired open call,
+        # and it must not be labeled GRANT.
+        item["classification"] = "NEWS"
+    return item, None
+
+
 def item_errors(o: dict) -> list[str]:
     errs = [f"missing {k}" for k in REQUIRED_ITEM if k not in o]
     if o.get("wire") not in WIRES:
         errs.append(f"wire {o.get('wire')!r}")
+    area = o.get("area")
+    if isinstance(area, bool) or area not in WIRE_AREAS:
+        errs.append(f"area {area!r}")
+    elif area == OPEN_PROGRAM_AREA and o.get("classification") != "GRANT":
+        errs.append("area 3 must be classified GRANT")
+    elif area != OPEN_PROGRAM_AREA and o.get("classification") == "GRANT":
+        errs.append("GRANT is only for open programs (area 3)")
     if o.get("classification") not in CLASSIFICATIONS:
         errs.append(f"classification {o.get('classification')!r}")
     if o.get("discovered_via") not in DISCOVERED_VIA:
@@ -82,17 +147,33 @@ def validate_payload(payload: dict) -> dict:
         if not isinstance(o, dict):
             dropped += 1
             continue
-        errs = item_errors(o)
-        if errs:
+        item, reason = prepare_opportunity(o)
+        if item is None:
             rejected.append({
                 "name": o.get("name"),
                 "source_url": o.get("source_url"),
                 "classification": "NOISE" if o.get("classification") not in REJECT_CLASS else o["classification"],
+                "reason": reason,
+            })
+            dropped += 1
+            continue
+        if item.get("classification") != o.get("classification"):
+            print(
+                f"[validate] {item.get('name')!r}: classification {o.get('classification')!r} "
+                f"-> {item['classification']!r} (area {item.get('area')})",
+                file=sys.stderr,
+            )
+        errs = item_errors(item)
+        if errs:
+            rejected.append({
+                "name": item.get("name"),
+                "source_url": item.get("source_url"),
+                "classification": "NOISE" if item.get("classification") not in REJECT_CLASS else item["classification"],
                 "reason": "schema: " + "; ".join(errs),
             })
             dropped += 1
         else:
-            kept.append(o)
+            kept.append(item)
     payload["opportunities"] = kept
     payload["rejected"] = rejected
     if dropped:

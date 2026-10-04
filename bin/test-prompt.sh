@@ -125,6 +125,47 @@ if [ -n "${G:-}" ] && [ -n "${AI:-}" ]; then
     || bad "grok lane still has the sed ampersand bug"
 fi
 
+echo "== F. six wire areas, area field, OUT list, facts-only summary =="
+for wire in crypto ai oss; do
+  W="$(render "$wire")" || { bad "render $wire for areas"; continue; }
+  has "$W" "Wire areas:" && ok "$wire: wire definition lists the six areas" || bad "$wire: no area list in the wire definition"
+  has "$W" "Return \`area\`" && ok "$wire: prompt returns area" || bad "$wire: prompt does not return area"
+  has "$W" "primary source (funder page, forum vote, official post)" \
+    && ok "$wire: primary-source requirement" || bad "$wire: no primary-source requirement"
+  has "$W" "Attributed commentary is area 5 when it comes from a credible named person" \
+    && ok "$wire: commentary is area 5 from a credible named person" || bad "$wire: commentary rule missing"
+  has "$W" "record it as their view" && ok "$wire: commentary recorded as their view" || bad "$wire: commentary not recorded as a view"
+  has "$W" "Retroactive funding results are area 2" && ok "$wire: retro results are area 2" || bad "$wire: retro results not area 2"
+  has "$W" "VC/equity raises (including AI lab raises)" && ok "$wire: OUT rejects equity raises" || bad "$wire: equity raises not rejected"
+  has "$W" "product launches without funding" && ok "$wire: OUT rejects product launches" || bad "$wire: product launches not rejected"
+  has "$W" "price/listings/regulation news" && ok "$wire: OUT rejects price/listings/regulation" || bad "$wire: market news not rejected"
+  has "$W" "off-program jobs" && ok "$wire: OUT rejects off-program jobs" || bad "$wire: off-program jobs not rejected"
+  has "$W" "no derived numbers" && ok "$wire: summary has no derived numbers" || bad "$wire: derived numbers not banned"
+  has "$W" "GRANT" && has "$W" "only for area 3" \
+    && ok "$wire: GRANT is only the open program" || bad "$wire: GRANT is not limited to area 3"
+  has "$W" "CURRENTLY-OPEN" && bad "$wire: still hunts only currently-open programs" || ok "$wire: not limited to currently-open programs"
+  has "$W" "lead with an action verb" && bad "$wire: summary still leads with an action verb" || ok "$wire: summary uses the funder's verb"
+done
+C="$(render crypto)"; A="$(render ai)"; O="$(render oss)"
+has "$C" "4 liquidity and performance rewards" && ok "crypto area 4 is liquidity/performance" || bad "crypto area 4 missing"
+has "$A" "compute and API credit programs" && ok "ai area 4 is compute/API credits" || bad "ai area 4 missing"
+has "$O" "4 maintainer and performance incentives" && ok "oss area 4 is maintainer incentives" || bad "oss area 4 missing"
+has "$C" "Hunt all six wire areas" && ok "claude discovery hunts all six areas" || bad "claude discovery is still novelty/recency only"
+
+G="$(render crypto grok)" || bad "render crypto/grok for hard-drop"
+if [ -n "${G:-}" ]; then
+  has "$G" "applicant \"I applied\" recaps" && ok "grok hard-drop still drops applicant recaps" || bad "grok dropped the applicant-recap hard-drop"
+  has "$G" "Funder-published award results are area 2" && ok "grok lets funder-published award results through" || bad "grok still drops funder-published award results"
+  has "$G" "Do not let applicant recaps through generally" && ok "grok does not accept applicant recaps generally" || bad "grok hard-drop no longer limits the carve-out"
+  has "$G" "jobs, VC raises, token launches" && ok "grok hard-drop list kept" || bad "grok hard-drop list was replaced"
+fi
+
+echo "== G. salvage prompt asks for area and GRANT only on open programs =="
+SRC="$ROOT/run-producer.sh"
+has "$SRC" "Each kept item must include area as an integer" && ok "salvage prompt requires area" || bad "salvage prompt does not require area"
+has "$SRC" "Set classification to GRANT only when area is 3" && ok "salvage prompt reserves GRANT for area 3" || bad "salvage prompt does not reserve GRANT"
+has "$SRC" "no derived numbers" && ok "salvage prompt bans derived numbers" || bad "salvage prompt allows derived numbers"
+
 echo
 echo "PASS=$PASS FAIL=$FAILN"
 [ "$FAILN" -eq 0 ] && echo "ALL PASS"

@@ -53,7 +53,7 @@ chmod +x "$TMP/timeout"
 # nothing and exits 1, like a session that was never persisted.
 cat > "$TMP/claude" <<'EOF'
 #!/usr/bin/env bash
-payload='{"result":"{\"producer\":\"claude-code\",\"variant\":\"A\",\"wire\":\"crypto\",\"run_id\":\"test\",\"generated_at\":\"2026-06-30T00:00:00Z\",\"opportunities\":[{\"name\":\"Timeout Salvage Grant\",\"source_url\":\"https://127.0.0.1:1/timeout-salvage\",\"wire\":\"crypto\",\"amount\":\"$10k\",\"deadline\":\"2026-12-31\",\"summary\":\"Flushed before the kill.\",\"classification\":\"GRANT\",\"fit_score\":80,\"fit_reason\":\"test\",\"evidence\":[\"https://127.0.0.1:1/timeout-salvage\"],\"discovered_via\":\"web_search\"}],\"rejected\":[]}","total_cost_usd":0.01,"duration_ms":1234,"is_error":false}'
+payload='{"result":"{\"producer\":\"claude-code\",\"variant\":\"A\",\"wire\":\"crypto\",\"run_id\":\"test\",\"generated_at\":\"2026-06-30T00:00:00Z\",\"opportunities\":[{\"name\":\"Timeout Salvage Grant\",\"source_url\":\"https://127.0.0.1:1/timeout-salvage\",\"wire\":\"crypto\",\"amount\":\"$10k\",\"deadline\":\"2026-12-31\",\"summary\":\"Flushed before the kill.\",\"area\":3,\"classification\":\"GRANT\",\"fit_score\":80,\"fit_reason\":\"test\",\"evidence\":[\"https://127.0.0.1:1/timeout-salvage\"],\"discovered_via\":\"web_search\"}],\"rejected\":[]}","total_cost_usd":0.01,"duration_ms":1234,"is_error":false}'
 empty='{"result":"{\"producer\":\"claude-code\",\"variant\":\"A\",\"wire\":\"crypto\",\"run_id\":\"test\",\"generated_at\":\"2026-06-30T00:00:00Z\",\"opportunities\":[],\"rejected\":[]}","total_cost_usd":0.01,"duration_ms":1234,"is_error":false}'
 mode="${STUB_MODE:-sleep-first}"
 for a in "$@"; do

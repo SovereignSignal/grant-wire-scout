@@ -20,7 +20,7 @@ def check(label, cond):
 good = {
     "name": "Test Grant", "source_url": "https://example.com/g",
     "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31",
-    "summary": "Apply now.", "classification": "GRANT", "fit_score": 80,
+    "summary": "Apply now.", "area": 3, "classification": "GRANT", "fit_score": 80,
     "fit_reason": "fresh", "evidence": ["https://example.com/g"],
     "discovered_via": "web_search",
 }
@@ -46,6 +46,52 @@ p = {"opportunities": [good, u], "rejected": []}
 p = validate.drop_unverified(p)
 check("REQUIRE_VERIFIED keeps verified/unspecified", len(p["opportunities"]) == 1)
 check("REQUIRE_VERIFIED drops unverified", len(p["rejected"]) == 1)
+
+award = {**good, "name": "Round results", "area": 2, "classification": "GRANT",
+         "source_url": "https://example.com/results", "summary": "The funder named the recipients."}
+aw = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [award], "rejected": [],
+})))
+check("area 2 stays in opportunities", len(aw["opportunities"]) == 1)
+check("area 2 is not labeled GRANT", aw["opportunities"][0]["classification"] == "NEWS")
+check("area 2 stays area 2", aw["opportunities"][0]["area"] == 2)
+
+opened = {**good, "name": "Open call", "area": "3", "classification": "NEWS"}
+op = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [opened], "rejected": [],
+})))
+check("string area 3 coerces to int", op["opportunities"][0]["area"] == 3)
+check("area 3 is labeled GRANT", op["opportunities"][0]["classification"] == "GRANT")
+
+missing = {**good, "name": "No area"}
+del missing["area"]
+ms = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [missing], "rejected": [],
+})))
+check("missing area is rejected", len(ms["opportunities"]) == 0 and len(ms["rejected"]) == 1)
+check("missing area reason names area", "area" in (ms["rejected"][0].get("reason") or ""))
+
+out_item = {**good, "name": "Equity raise", "area": "out", "classification": "NEWS"}
+ot = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [out_item], "rejected": [],
+})))
+check("OUT area is rejected", len(ot["opportunities"]) == 0)
+check("OUT reason names OUT", "OUT" in (ot["rejected"][0].get("reason") or ""))
+
+import submit
+body, delivered = submit.build_submission_body(
+    [good, award, out_item, missing], "crypto", "A", "2026-10-04", "claude-code")
+raw = json.loads(body["rawText"])["opportunities"]
+check("submit body keeps open program and result", len(raw) == 2 and len(delivered) == 2)
+by_name = {o["name"]: o for o in raw}
+check("submit labels the open program GRANT", by_name["Test Grant"]["classification"] == "GRANT" and by_name["Test Grant"]["area"] == 3)
+check("submit labels the result NEWS", by_name["Round results"]["classification"] == "NEWS" and by_name["Round results"]["area"] == 2)
+check("submit body carries area", all("area" in o for o in raw))
+check("submit drops OUT and missing area", "Equity raise" not in by_name and "No area" not in by_name)
 sys.exit(1 if fails else 0)
 PY
 [ $? -eq 0 ] && ok "validate.py matrix" || bad "validate.py matrix"

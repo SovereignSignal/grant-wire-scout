@@ -57,7 +57,8 @@ def main(opp_path: str, out_report: str, raw_path: str) -> int:
             status = vf.get("status")
             tag = {"verified": "✅", "partial": "🟡", "unverified": "❓", "fetch_failed": "⚠️"}.get(status, "")
             lines.append(
-                f"- {tag} **{o.get('name','?')}** — {o.get('wire','?')}, "
+                f"- {tag} **{o.get('name','?')}** — area {o.get('area','?')}, "
+                f"{o.get('classification','?')}, {o.get('wire','?')}, "
                 f"fit {o.get('fit_score','?')}, {o.get('amount','?')}, "
                 f"deadline {o.get('deadline','?')}"
             )
