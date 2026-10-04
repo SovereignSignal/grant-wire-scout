@@ -40,7 +40,7 @@ REQUIRED_TOP_KEYS = ("producer", "variant", "wire", "opportunities")
 # Required keys for an individual opportunity object (salvage acceptance test).
 REQUIRED_ITEM_KEYS = (
     "name", "source_url", "wire", "amount", "deadline", "summary",
-    "classification", "fit_score", "fit_reason", "evidence", "discovered_via",
+    "area", "classification", "fit_score", "fit_reason", "evidence", "discovered_via",
 )
 
 # Top-level metadata keys we try to recover on salvage (all precede the array).

@@ -89,7 +89,7 @@ def payload():
     return {"producer": "claude-code", "variant": "A", "wire": "crypto", "run_id": "e2e",
          "generated_at": "2026-07-01T00:00:00Z", "rejected": [],
          "opportunities": [{"name": "E2E Test Grant", "source_url": base + "/g1", "wire": "crypto",
-             "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "classification": "GRANT",
+             "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "area": 3, "classification": "GRANT",
              "fit_score": 80, "fit_reason": "test", "evidence": [base + "/g1"], "discovered_via": "web_search"}]}
 if "--resume" in sys.argv:
     # The producer's resume-flush after a wall-clock kill. STUB_RESUME=payload plays a
@@ -164,6 +164,14 @@ echo "== A happy path: delivered + no alert =="
 run_case ok
 [ "$CASE_RC" -eq 0 ] && ok "rc=0" || { printf '%s\n' "$CASE_OUT" | tail -15; bad "happy rc=$CASE_RC"; }
 [ -s "$CAP/submit.json" ] && ok "delivered to Wire Room" || bad "no submit captured"
+python3 - "$CAP/submit.json" <<'PY' && ok "submit body has area 3 labeled GRANT" || bad "submit body missing area or mislabeled GRANT"
+import json, sys
+body = json.load(open(sys.argv[1]))
+opps = json.loads(body["rawText"])["opportunities"]
+assert len(opps) == 1, opps
+assert opps[0]["area"] == 3, opps[0]
+assert opps[0]["classification"] == "GRANT", opps[0]
+PY
 [ -z "$(alerts)" ] && ok "no alert fired" || bad "unexpected alert: $(alerts)"
 printf '%s\n' "$CASE_OUT" | grep -q '\[grok\] cli version' \
   && bad "claude run logged a grok cli version" || ok "claude run does not touch the grok cli"
