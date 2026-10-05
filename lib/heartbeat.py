@@ -48,9 +48,10 @@ A zero-yield alert also carries the wire's habit (summarize_trend). opportunity_
 post-dedup, so a clean 0 is either a thin market OR every find was already in the catalog
 — same ledger row, opposite meanings. The copy says both; the trend says whether to look.
 
-A healthy day also sends a daily digest (lib/digest.py) so operators can see what
+A healthy day can also send a daily digest (lib/digest.py) so operators can see what
 landed, which models ran, and week/month quota-equivalent spend. That is visibility,
-not an alert — it does not write scout_alerts. Disable with SCOUT_DIGEST=0.
+not an alert — it does not write scout_alerts. It stays off unless
+SCOUT_REVIEW_EMAIL=1 (WireOps is the routine mail). SCOUT_DIGEST=0 forces it off.
 
 EXIT CODES — a firing dead-man's-switch is NOT a crashed deploy. The service runs with
 restartPolicyType=NEVER, so any non-zero exit makes Railway send "Deploy Crashed!"; returning 1
@@ -66,8 +67,9 @@ Env: DATABASE_URL (read access to the Wire Room Postgres), SCOUT_SILENCE_HOURS (
      SCOUT_SCAN_SOURCE, if set, pins a single lane (overrides the default pair).
      Ledger rows are scoped by run_id prefix so a dedicated single-lane heartbeat
      does not diagnose the other producer's ticks.
-     SCOUT_DIGEST (default on) sends the daily visibility email after the silence
-     check. SCOUT_DIGEST=0 restores silence-means-healthy-only.
+     SCOUT_REVIEW_EMAIL (default off) sends the daily "N to review" email after
+     the silence check. Set it to 1 to turn that mail back on. SCOUT_DIGEST=0
+     forces it off either way. Exception and lane-death alerts are separate.
 """
 import os
 import statistics
@@ -553,8 +555,8 @@ def main():
             print("heartbeat: alert delivery FAILED — exiting non-zero so the crash mail is the backstop",
                   file=sys.stderr)
 
-    # Daily visibility mail. Independent of the dead-man's-switch: a healthy day
-    # still gets a digest so operators can see what landed and what quota was used.
+    # Daily visibility mail. Independent of the dead-man's-switch, and muted
+    # unless SCOUT_REVIEW_EMAIL=1 (digest.main returns 0 without sending).
     # Import here so a digest bug cannot prevent the silence check from running,
     # and so hermetic heartbeat tests can set SCOUT_DIGEST=0 and skip this path.
     digest_rc = 0

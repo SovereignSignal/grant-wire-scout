@@ -22,7 +22,13 @@ as alerts, but it does NOT write scout_alerts — a healthy digest is not an inc
 Env (same as heartbeat, plus):
   DATABASE_URL, RESEND_API_KEY, NOTIFICATION_EMAIL, ALERT_FROM
   SCOUT_WIRES, SCOUT_SCAN_SOURCES / SCOUT_SCAN_SOURCE
-  SCOUT_DIGEST          default on; 0/false/off disables
+  SCOUT_REVIEW_EMAIL    morning "N to review" mail. Off unless 1/true/on/yes.
+                        This is the kill switch: a deploy mutes the Resend
+                        brief without deleting the mailer. Claude and Grok
+                        crons do not send this mail; the heartbeat does, once,
+                        for both lanes.
+  SCOUT_DIGEST          0/false/off/no still forces the mail off, even when
+                        SCOUT_REVIEW_EMAIL=1. Unset does not turn it on.
   SCOUT_DIGEST_HOURS    lookback for "today" (default 26 — covers yesterday's
                         14:00 send through this morning's Claude/Grok tick)
   WIRE_ROOM_UI          optional; if set, each title links to
@@ -88,9 +94,33 @@ _SOON = "#b45309"
 _PAGE = "#f5f5f7"
 
 
+_OFF = ("0", "false", "off", "no")
+_ON = ("1", "true", "on", "yes")
+
+
+def _raw(name):
+    return (os.environ.get(name) or "").strip().lower()
+
+
+def digest_switch_off():
+    """True when SCOUT_DIGEST is an explicit off. Unset does not block."""
+    return _raw("SCOUT_DIGEST") in _OFF
+
+
+def review_email_enabled():
+    """Morning review mail. Off unless SCOUT_REVIEW_EMAIL is explicitly on."""
+    return _raw("SCOUT_REVIEW_EMAIL") in _ON
+
+
 def enabled():
-    raw = (os.environ.get("SCOUT_DIGEST") or "1").strip().lower()
-    return raw not in ("0", "false", "off", "no")
+    """Send the routine Scout review mail only when the kill switch is on.
+
+    Default is off, including when the older SCOUT_DIGEST=1 is still set on
+    the heartbeat service. SCOUT_DIGEST=0 remains a hard off.
+    """
+    if digest_switch_off():
+        return False
+    return review_email_enabled()
 
 
 def digest_hours():
@@ -798,7 +828,10 @@ def build(queue, runs, spend, backlog, outcomes, lane_runs, hours, sources, now=
 
 def main():
     if not enabled():
-        print("digest: disabled (SCOUT_DIGEST=0)")
+        if digest_switch_off():
+            print("digest: disabled (SCOUT_DIGEST=0)")
+        else:
+            print("digest: review email muted (set SCOUT_REVIEW_EMAIL=1 to send)")
         return 0
     dsn = os.environ.get("DATABASE_URL", "")
     if not dsn:

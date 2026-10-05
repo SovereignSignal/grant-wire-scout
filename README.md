@@ -37,7 +37,7 @@ Stringer intake (Hermes cron 12:00 UTC) ──► reads cohorts + Notion DB ─�
 | `lib/validate.py` | Enforce the opportunity schema; optional verified-only gate |
 | `lib/skip_if_fed.py` | Opt-in: skip a wire the other lane just filled |
 | `bin/scoreboard.sh` | Weekly approve-of-decided by source × wire × variant |
-| `lib/digest.py` | Daily visibility email: queue finds, models used, week/month spend |
+| `lib/digest.py` | Daily "N to review" mail (off unless `SCOUT_REVIEW_EMAIL=1`) |
 | `runs/<wire>/<variant>/<run_id>/` | Per-run artifact: `opportunities.json`, `report.md`, `raw.json`, `meta.json`, `producer.stderr` (+ `raw.killed.json` / `raw.salvage.json` after a timeout) |
 
 ## Output contract (the important bit)
@@ -126,7 +126,7 @@ Thestringer / Hermes cron / Notion DB `366000c0` are **not** the live path.
 |---|---|---|
 | `grant-wire-scout` (Claude) | `0 4 * * 0,2,4,6` | `bin/run-all.sh` |
 | `grant-wire-grok` | `0 6 * * 1,3,5` | `bin/run-grok-all.sh` |
-| `grant-wire-heartbeat` | `0 14 * * *` | `python3 lib/heartbeat.py` (silence page + daily digest) |
+| `grant-wire-heartbeat` | `0 14 * * *` | `python3 lib/heartbeat.py` (silence page; digest only if `SCOUT_REVIEW_EMAIL=1`) |
 
 `railway.toml` historically did not auto-apply on the Claude service — confirm the
 schedule in the Railway UI/API after deploy.
@@ -140,7 +140,7 @@ schedule in the Railway UI/API after deploy.
 - [x] `SCOUT_SKIP_IF_FED_HOURS` (opt-in; skip a wire the other lane just filled)
 - [x] Runtime schema validate + optional `SCOUT_REQUIRE_VERIFIED`
 - [x] Standing scoreboard: `./bin/scoreboard.sh 30`
-- [x] Daily digest email (queue + models + week/month quota-equiv spend)
+- [x] Daily digest email, muted unless `SCOUT_REVIEW_EMAIL=1` (WireOps is the routine mail)
 - [ ] Apply `sql/scout_runs_funnel.sql` on Wire Room Postgres (saturation vs thin)
 - [ ] WRO enum `grok-build` (then set `SCOUT_SCAN_SOURCE=grok-build` on the Grok service)
 - [ ] Promotion scoreboard as a Wire Room view (script exists; pin it somewhere operators look)

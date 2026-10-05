@@ -9,10 +9,9 @@
 # 14:00 still see the previous Claude tick (58h) and Friday still sees Wednesday's
 # Grok tick (56h). 52h missed both and paged a saturated Claude oss while Grok had
 # just fed the wire.
-# The digest is on by default (SCOUT_DIGEST=1): every 14:00 UTC tick emails what
-# landed in the queue, which models ran, and week/month quota-equivalent spend.
-# Exception alerts still fire separately. Set SCOUT_DIGEST=0 to go back to
-# silence-means-healthy only.
+# The morning "N to review" digest is off unless SCOUT_REVIEW_EMAIL=1. WireOps
+# is the routine mail. Exception and lane-death alerts still fire separately.
+# SCOUT_DIGEST=0 forces the digest off even if SCOUT_REVIEW_EMAIL=1.
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
