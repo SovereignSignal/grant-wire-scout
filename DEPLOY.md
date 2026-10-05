@@ -33,8 +33,9 @@ only on the Grok lane so it doesn't collide with Stringer's variant `S`.
    in the UI). Variables: `DATABASE_URL` (read the shared Wire Room Postgres), `RESEND_API_KEY`,
    `NOTIFICATION_EMAIL`, `ALERT_FROM`, `SCOUT_SILENCE_HOURS=60`. No volume, no claude/grok token.
    Watches **both** `claude-code` and `grok-scout` by default — a wire is silent only when
-   neither lane landed rows. Also sends the daily digest (queue + models + week/month
-   spend) unless `SCOUT_DIGEST=0`. Pin one lane with `SCOUT_SCAN_SOURCE=claude-code` (or
+   neither lane landed rows. The morning "N to review" digest stays off unless
+   `SCOUT_REVIEW_EMAIL=1` (WireOps is the routine mail). `SCOUT_DIGEST=0` forces
+   that mail off even when the review flag is on. Pin one lane with `SCOUT_SCAN_SOURCE=claude-code` (or
    `grok-scout`) if you want an isolated monitor. 60 hours covers the weekday split:
    Tue/Thu/Sat 14:00 still see the previous Claude tick (58h), and Friday still sees
    Wednesday's Grok tick (56h). 52h missed both and paged a saturated Claude oss while
@@ -79,11 +80,13 @@ For Grok: same, one manual deploy of the grok-scout service. Confirm
 - **Cadence:** Claude Sun/Tue/Thu/Sat 04:00 UTC; Grok Mon/Wed/Fri 06:00 UTC. Heartbeat
   runs daily at 14:00 UTC against **both** scout sources (`SCOUT_SILENCE_HOURS=60`).
 - **Alerts are exception-only** (`AUTH` / `QUOTA` / `EMPTY` / `TIMEOUT` / `DELIVERY` / `FAILED`), plus the
-  heartbeat when a wire is silent across both lanes. The heartbeat also sends a **daily
-  digest** at 14:00 UTC: what landed in the queue, which models ran, and quota-equivalent
-  spend for today / the last 7 days / the last 30 days / calendar MTD. That mail is
-  visibility, not an incident (`SCOUT_DIGEST=0` turns it off). Exception alerts still
-  fire on their own.
+  heartbeat when a wire is silent across both lanes, plus a lane-death page. Those
+  paths are unchanged. The heartbeat can also send a **daily digest** at 14:00 UTC
+  (what landed in the queue, which models ran, quota-equivalent spend). That is the
+  Scout "N to review" Resend mail. It is off unless `SCOUT_REVIEW_EMAIL=1` on the
+  heartbeat service. `SCOUT_DIGEST=0` forces it off. Claude (`grant-wire-scout`) and
+  Grok (`grant-wire-grok`) do not send this mail; they only alert on failure. WireOps
+  stays the routine machine email.
 - **Quota, not dollars.** Both lanes ride subscriptions (Claude Max, SuperGrok). The CLI
   `cost_usd` is accounting-equivalent only. The real budget is the shared usage cap and
   operator review time. Keep `SCOUT_VARIANT=A` (unset used to fall through to A+B).

@@ -12,7 +12,9 @@
 #              a today line and a quota line. Readable in two minutes.
 #   SEND     — goes through notify.py with record=False (not an alert)
 #   EXIT     — 0 sent / disabled; 1 send failed; 2 cannot read the DB
-#   OFF      — SCOUT_DIGEST=0 is a no-op (heartbeat tests rely on this)
+#   OFF      — unset SCOUT_REVIEW_EMAIL sends nothing (deploy mute).
+#              SCOUT_DIGEST=0 is still a hard off (heartbeat tests rely on this),
+#              even when SCOUT_REVIEW_EMAIL=1.
 #
 # Hermetic: psycopg2 stubbed from a JSON fixture; notify webhook pointed at a
 # local mock. No network, no prod side effects.
@@ -321,7 +323,7 @@ FX='{
   "lane_runs": [["claude-code-2026-08-30T040000Z", "ok", 1, 4, 5.00], ["claude-code-2026-08-30T041000Z", "ok", 1, 2, 2.50]]
 }'
 
-rc="$(run_dg "$FX")"
+rc="$(run_dg "$FX" SCOUT_REVIEW_EMAIL=1)"
 [ "$rc" = "0" ] && ok "sent digest -> rc=0" || bad "sent digest -> rc=$rc (want 0)"
 body="$(mail_body)"
 grep -qi "to review" <<<"$body" && ok "mail subject/body says what needs review" || bad "mail missing 'to review': $body"
@@ -332,23 +334,43 @@ grep -qi "28.00\|\$28.00" <<<"$body" && ok "mail has MTD spend" || bad "mail mis
 grep -qi "Credible org" <<<"$body" && ok "mail carries the score reason" || bad "mail missing score reason"
 grep -qi "8 waiting\|backlog" <<<"$body" && ok "mail has the backlog" || bad "mail missing backlog"
 
-# disabled
-rc="$(run_dg "$FX" SCOUT_DIGEST=0)"
+# deploy mute: unset, explicit 0, and the old SCOUT_DIGEST=1 default all stay silent
+rc="$(run_dg "$FX")"
+[ "$rc" = "0" ] && ok "unset SCOUT_REVIEW_EMAIL -> rc=0" || bad "default-off digest rc=$rc"
+[ -z "$(mail_body)" ] && ok "unset SCOUT_REVIEW_EMAIL sends nothing" || bad "default-off digest still sent mail"
+grep -q "review email muted" "$CAP/out.txt" && ok "default-off log names the kill switch" || bad "mute log missing: $(cat "$CAP/out.txt")"
+
+rc="$(run_dg "$FX" SCOUT_DIGEST=1)"
+[ "$rc" = "0" ] && ok "SCOUT_DIGEST=1 without review flag -> rc=0" || bad "legacy digest=1 rc=$rc"
+[ -z "$(mail_body)" ] && ok "SCOUT_DIGEST=1 does not send the review mail" || bad "legacy digest=1 still sent mail"
+
+rc="$(run_dg "$FX" SCOUT_REVIEW_EMAIL=0)"
+[ -z "$(mail_body)" ] && ok "SCOUT_REVIEW_EMAIL=0 sends nothing" || bad "SCOUT_REVIEW_EMAIL=0 still sent mail"
+
+rc="$(run_dg "$FX" SCOUT_REVIEW_EMAIL=false)"
+[ -z "$(mail_body)" ] && ok "SCOUT_REVIEW_EMAIL=false sends nothing" || bad "SCOUT_REVIEW_EMAIL=false still sent mail"
+
+# SCOUT_DIGEST=0 still wins, including over an explicit opt-in
+rc="$(run_dg "$FX" SCOUT_DIGEST=0 SCOUT_REVIEW_EMAIL=1)"
 [ "$rc" = "0" ] && ok "SCOUT_DIGEST=0 -> rc=0" || bad "disabled digest rc=$rc"
 [ -z "$(mail_body)" ] && ok "SCOUT_DIGEST=0 sends nothing" || bad "disabled digest still sent mail"
+grep -q "digest: disabled (SCOUT_DIGEST=0)" "$CAP/out.txt" && ok "SCOUT_DIGEST=0 log unchanged" || bad "SCOUT_DIGEST=0 log: $(cat "$CAP/out.txt")"
 
 # send failed
 touch "$CAP/force_500"
-rc="$(run_dg "$FX")"
+rc="$(run_dg "$FX" SCOUT_REVIEW_EMAIL=1)"
 rm -f "$CAP/force_500"
 [ "$rc" = "1" ] && ok "undeliverable digest -> rc=1" || bad "undeliverable digest rc=$rc (want 1)"
 
-# DB down
-rc="$(run_dg "$FX" STUB_DB_FAIL=1)"
+# DB down — only consulted when the mail is actually enabled
+rc="$(run_dg "$FX" STUB_DB_FAIL=1 SCOUT_REVIEW_EMAIL=1)"
 [ "$rc" = "2" ] && ok "unreachable DB -> rc=2" || bad "unreachable DB rc=$rc (want 2)"
 
+rc="$(env PYTHONPATH="$ROOT/lib" DATABASE_URL= SCOUT_REVIEW_EMAIL=1 python3 "$ROOT/lib/digest.py" >/dev/null 2>&1; echo $?)"
+[ "$rc" = "2" ] && ok "missing DATABASE_URL while enabled -> rc=2" || bad "missing DATABASE_URL rc=$rc (want 2)"
+
 rc="$(env PYTHONPATH="$ROOT/lib" DATABASE_URL= python3 "$ROOT/lib/digest.py" >/dev/null 2>&1; echo $?)"
-[ "$rc" = "2" ] && ok "missing DATABASE_URL -> rc=2" || bad "missing DATABASE_URL rc=$rc (want 2)"
+[ "$rc" = "0" ] && ok "missing DATABASE_URL while muted -> rc=0" || bad "muted missing DATABASE_URL rc=$rc (want 0)"
 
 echo "== C. notify.record=False (digest is not an alert) =="
 python3 - "$ROOT" <<'PY'
@@ -431,15 +453,23 @@ run_hb(){
   echo $?
 }
 
-rc="$(run_hb "$FX_BOTH" SCOUT_DIGEST=1)"
+rc="$(run_hb "$FX_BOTH" SCOUT_DIGEST=1 SCOUT_REVIEW_EMAIL=1)"
 [ "$rc" = "0" ] && ok "heartbeat + digest on a healthy day -> rc=0" \
                 || bad "heartbeat + digest rc=$rc out=$(cat "$CAP/out.txt")"
 body="$(mail_body)"
 grep -qi "Grant Wire Scout SILENT\|Grant Wire Scout LANE\|⚠️" <<<"$body" \
   && bad "healthy day sent an exception alert: $body" \
   || ok "healthy day does not send a SILENT/LANE alert"
-grep -qi "Avalanche\|to review" <<<"$body" && ok "healthy day still sends the digest" \
-                                        || bad "healthy day sent no digest: $body"
+grep -qi "Avalanche\|to review" <<<"$body" && ok "opt-in healthy day still sends the digest" \
+                                        || bad "opt-in healthy day sent no digest: $body"
+
+rc="$(run_hb "$FX_BOTH" SCOUT_DIGEST=1)"
+[ "$rc" = "0" ] && ok "heartbeat with review mail muted -> rc=0" \
+                || bad "muted heartbeat rc=$rc out=$(cat "$CAP/out.txt")"
+body="$(mail_body)"
+[ -z "$body" ] && ok "muted heartbeat sends no review mail" || bad "muted heartbeat sent mail: $body"
+grep -q "review email muted" "$CAP/out.txt" && ok "heartbeat log says the review mail is muted" \
+  || bad "heartbeat mute log missing: $(cat "$CAP/out.txt")"
 
 echo
 echo "PASS=$PASS FAIL=$FAILN"
