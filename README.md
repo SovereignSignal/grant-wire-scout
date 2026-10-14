@@ -7,14 +7,14 @@ default Railway cron; Grok is a third service on the same image, not a replaceme
 
 ## Why
 
-The Codex + Claude Notion producer pipeline dropped ~93% over 4 weeks (mid-May → mid-June 2026), with a Codex "model at capacity" outage as the clearest lead. The daily *intake* (Stringer/Hermes on `thestringer`) is healthy; the decline is purely upstream producer volume. This producer makes Claude Code a **reliable** producer so the Wire Room keeps fed independent of Codex, and lets us measure Claude vs Codex head-to-head on promotion rate.
+The Codex + Claude Notion producer pipeline dropped ~93% over 4 weeks (mid-May → mid-June 2026), with a Codex "model at capacity" outage as the clearest lead. The daily *intake* (Stringer/Hermes on the producer VM) is healthy; the decline is purely upstream producer volume. This producer makes Claude Code a **reliable** producer so the Wire Room keeps fed independent of Codex, and lets us measure Claude vs Codex head-to-head on promotion rate.
 
 ## What a "scheduled task" is here
 
-Claude Code (v2.1) has no native scheduler. A "scheduled task" = a headless `claude -p` invocation driven by an **external** scheduler. On `thestringer` that scheduler is **Hermes cron** (`~/.hermes/cron/jobs.json`) — the same system that already fires the daily intake (`e673c266f671`, 12:00 UTC). The producer runs **alongside** it, one layer upstream.
+Claude Code (v2.1) has no native scheduler. A "scheduled task" = a headless `claude -p` invocation driven by an **external** scheduler. On the original producer VM that scheduler is **Hermes cron** (`~/.hermes/cron/jobs.json`) — the same system that already fires the daily intake (`e673c266f671`, 12:00 UTC). The producer runs **alongside** it, one layer upstream.
 
 ```
-Hermes cron (thestringer) ──► run-producer.sh ──► claude -p (WebSearch+WebFetch) ──► opportunities.json
+Hermes cron (producer VM) ──► run-producer.sh ──► claude -p (WebSearch+WebFetch) ──► opportunities.json
                                                                                               │
                                               writes to cohort lane + (opt) Notion DB ◄──────┘
                                                                                               │
@@ -96,7 +96,7 @@ See [DEPLOY.md](DEPLOY.md) for the third-service checklist. Claude cron stays on
 This producer runs as **Claude Code on a Claude.ai subscription (Max)**, authed via a
 **long-lived OAuth setup-token** (`claude setup-token`). There is no `ANTHROPIC_API_KEY`;
 it does not make direct API calls. The local validation run on M5 used the same auth
-(claude.ai OAuth, Max), so thestringer's runs will be auth-faithful to what was tested.
+(claude.ai OAuth, Max), so the producer VM's runs will be auth-faithful to what was tested.
 
 ## Cost / capacity framing — it's a quota, not a bill
 
@@ -120,7 +120,7 @@ overrides either default for one run.
 ## Deployment
 
 Production is **Railway**, three crons from this image. See [DEPLOY.md](DEPLOY.md).
-Thestringer / Hermes cron / Notion DB `366000c0` are **not** the live path.
+The original producer VM / Hermes cron / Notion DB are **not** the live path.
 
 | Service | Cron (UTC) | Start |
 |---|---|---|
