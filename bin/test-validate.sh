@@ -19,7 +19,7 @@ def check(label, cond):
 
 good = {
     "name": "Test Grant", "source_url": "https://example.com/g",
-    "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31",
+    "wire": "crypto", "amount": "$10k", "deadline": "2099-12-31",
     "summary": "Apply now.", "area": 3, "classification": "GRANT", "fit_score": 80,
     "fit_reason": "fresh", "evidence": ["https://example.com/g"],
     "discovered_via": "web_search",
@@ -53,9 +53,81 @@ aw = validate.validate_payload(json.loads(json.dumps({
     "producer": "claude-code", "variant": "A", "wire": "crypto",
     "opportunities": [award], "rejected": [],
 })))
-check("area 2 stays in opportunities", len(aw["opportunities"]) == 1)
-check("area 2 is not labeled GRANT", aw["opportunities"][0]["classification"] == "NEWS")
-check("area 2 stays area 2", aw["opportunities"][0]["area"] == 2)
+check("award or results announcement is not submitted", len(aw["opportunities"]) == 0 and len(aw["rejected"]) == 1)
+check("award rejection names the announcement", "award" in (aw["rejected"][0].get("reason") or "").lower())
+check("award rejection is NEWS", aw["rejected"][0]["classification"] == "NEWS")
+
+budget = {**good, "name": "Treasury budget", "area": 1, "classification": "NEWS",
+          "summary": "The DAO passed a budget for grants."}
+bg = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [budget], "rejected": [],
+})))
+check("budget or policy news is not submitted", len(bg["opportunities"]) == 0)
+check("budget rejection names budget", "budget" in (bg["rejected"][0].get("reason") or "").lower())
+
+closed = {**good, "name": "Closed round", "deadline": "2020-01-15", "summary": "Apply by the deadline."}
+cl = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [closed], "rejected": [],
+})))
+check("past deadline is not submitted", len(cl["opportunities"]) == 0)
+check("past deadline is EXPIRED", cl["rejected"][0]["classification"] == "EXPIRED")
+check("past deadline reason names the closed call", "closed" in (cl["rejected"][0].get("reason") or "").lower())
+
+unknown = {**good, "name": "No date", "deadline": "unknown", "summary": "Apply somehow."}
+un = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [unknown], "rejected": [],
+})))
+check("unknown deadline is not submitted", len(un["opportunities"]) == 0)
+check("unknown deadline asks for a future date or rolling intake",
+      "rolling" in (un["rejected"][0].get("reason") or "").lower())
+
+rolling = {**good, "name": "Rolling intake", "deadline": "rolling",
+           "summary": "Applications are open. Submit the form on the program page."}
+ro = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [rolling], "rejected": [],
+})))
+check("rolling intake is kept", len(ro["opportunities"]) == 1)
+check("rolling intake is GRANT", ro["opportunities"][0]["classification"] == "GRANT")
+
+no_apply = {**good, "name": "Mystery fund", "source_url": "https://example.com/notes",
+            "summary": "The foundation has money for builders this year."}
+na = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [no_apply], "rejected": [],
+})))
+check("row with no way to apply is not submitted", len(na["opportunities"]) == 0)
+check("missing apply path is named", "apply" in (na["rejected"][0].get("reason") or "").lower())
+
+mislabeled = {**good, "name": "ESP round", "area": 3,
+              "summary": "The funder announced the recipients of the round."}
+ml = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [mislabeled], "rejected": [],
+})))
+check("results copy labeled as an open call is not submitted", len(ml["opportunities"]) == 0)
+
+shut = {**good, "name": "Shut call", "summary": "Applications are closed for this round."}
+sh = validate.validate_payload(json.loads(json.dumps({
+    "producer": "claude-code", "variant": "A", "wire": "crypto",
+    "opportunities": [shut], "rejected": [],
+})))
+check("closed-window copy is not submitted", len(sh["opportunities"]) == 0)
+check("closed-window rejection is EXPIRED", sh["rejected"][0]["classification"] == "EXPIRED")
+
+import datetime
+today = datetime.date(2026, 10, 19)
+still_open = dict(good)
+still_open["deadline"] = "2026-10-19"
+check("deadline of today is still an open call",
+      validate.open_call_rejection(still_open, today=today) is None)
+yesterday = dict(good)
+yesterday["deadline"] = "2026-10-18"
+check("deadline of yesterday is a past call",
+      "closed" in (validate.open_call_rejection(yesterday, today=today) or "").lower())
 
 opened = {**good, "name": "Open call", "area": "3", "classification": "NEWS"}
 op = validate.validate_payload(json.loads(json.dumps({
@@ -86,10 +158,10 @@ import submit
 body, delivered = submit.build_submission_body(
     [good, award, out_item, missing], "crypto", "A", "2026-10-04", "claude-code")
 raw = json.loads(body["rawText"])["opportunities"]
-check("submit body keeps open program and result", len(raw) == 2 and len(delivered) == 2)
+check("submit body keeps only the open call", len(raw) == 1 and len(delivered) == 1)
 by_name = {o["name"]: o for o in raw}
-check("submit labels the open program GRANT", by_name["Test Grant"]["classification"] == "GRANT" and by_name["Test Grant"]["area"] == 3)
-check("submit labels the result NEWS", by_name["Round results"]["classification"] == "NEWS" and by_name["Round results"]["area"] == 2)
+check("submit labels the open call GRANT", by_name["Test Grant"]["classification"] == "GRANT" and by_name["Test Grant"]["area"] == 3)
+check("submit drops the award announcement", "Round results" not in by_name)
 check("submit body carries area", all("area" in o for o in raw))
 check("submit drops OUT and missing area", "Equity raise" not in by_name and "No area" not in by_name)
 sys.exit(1 if fails else 0)

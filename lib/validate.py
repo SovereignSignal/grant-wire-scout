@@ -6,9 +6,16 @@ documentation only, so a bad classification / non-int fit_score / missing
 deadline still POSTed to Wire Room. Invalid items move to rejected[]; the run
 fails only when the top-level payload is unusable.
 
+The submit gate is stricter than the schema: a row is kept only when someone
+can apply to it now (open window, future deadline or rolling intake, and a
+clear way to apply). Award or results announcements, budget or policy news,
+and closed or past calls are rejected here so they never reach Wire Room.
+
 Usage: validate.py <opportunities.json>
 """
+import datetime
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,10 +25,44 @@ VARIANTS = {"A", "B"}
 WIRES = {"crypto", "ai", "oss"}
 CLASSIFICATIONS = {"GRANT", "EXPIRED", "NEWS", "NOISE"}
 REJECT_CLASS = {"EXPIRED", "NEWS", "NOISE", "DUPLICATE"}
-# Wire areas 1-6. Area 3 is the only open program; GRANT is reserved for it so
-# grants.watch does not ingest awards, governance, incentives, commentary, or tools.
+# Wire areas 1-6 are recognized so a mislabeled row can be rejected by name.
+# Only area 3 is submitted: an open call someone can apply to now. Areas 1, 2,
+# 4, 5, and 6 (budget or policy news, awards, non-application incentives,
+# commentary, tools) are dropped before they reach Wire Room.
 WIRE_AREAS = {1, 2, 3, 4, 5, 6}
 OPEN_PROGRAM_AREA = 3
+# Exact deadline tokens that mean intake is still open. "unknown" and "none" are not.
+ROLLING_DEADLINES = {"rolling", "rolling intake", "continuous", "ongoing"}
+_DATE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
+# A way to apply has to be visible on the row, not implied by the word "grant".
+_APPLY_TEXT = (
+    "apply", "submit", "rfp", "request for proposal", "call for",
+    "proposal", "how to apply", "intake",
+)
+_APPLY_PATH = {
+    "apply", "application", "applications", "submit", "submission", "submissions",
+    "rfp", "rfps", "proposal", "proposals", "cfp", "call", "calls",
+    "intake", "register", "form",
+}
+_RESULTS_PATH = {"results", "recipients", "winners", "awardees"}
+_RESULT_PHRASES = (
+    "recipients announced", "winners announced", "results announced",
+    "awards announced", "have been awarded", "has been awarded",
+    "were awarded", "was awarded", "announced the recipients",
+    "announced the winners", "announced the awards", "round results",
+    "grant results", "selected the recipients", "were selected", "was selected",
+)
+_BUDGET_PHRASES = (
+    "budget proposal", "budget announcement", "policy update",
+    "policy announcement", "treasury vote", "governance vote",
+    "passed a budget", "approved a budget", "approved the budget",
+)
+_CLOSED_PHRASES = (
+    "applications are closed", "applications closed",
+    "application window has closed", "call is closed", "call has closed",
+    "no longer accepting", "deadline has passed", "submissions are closed",
+    "submissions closed", "this round is closed", "round is closed",
+)
 DISCOVERED_VIA = {
     "web_search", "web_fetch", "source_list",
     "x_search", "x_keyword_search", "x_semantic_search",
@@ -63,12 +104,98 @@ def coerce_area(value):
     return None
 
 
+def _utc_today():
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def _words(item: dict) -> str:
+    return " ".join(str(item.get(k) or "") for k in ("name", "summary")).lower()
+
+
+def _path_segments(url) -> list[str]:
+    try:
+        path = urlparse(str(url or "")).path.lower()
+    except Exception:
+        return []
+    return [s for s in path.split("/") if s]
+
+
+def _deadline_status(deadline, today) -> str:
+    """'rolling', 'future' (today or later), 'past', or 'missing'."""
+    raw = " ".join(str(deadline or "").split()).lower()
+    if raw in ROLLING_DEADLINES:
+        return "rolling"
+    match = _DATE.match(raw)
+    if not match:
+        return "missing"
+    try:
+        day = datetime.date.fromisoformat(match.group(1))
+    except ValueError:
+        return "missing"
+    if day < today:
+        return "past"
+    return "future"
+
+
+def _has_apply_path(item: dict) -> bool:
+    """True when the row says how to apply, in the text or in the URL path."""
+    blob = " ".join(str(item.get(k) or "") for k in ("name", "summary", "source_url")).lower()
+    if any(cue in blob for cue in _APPLY_TEXT):
+        return True
+    return any(seg in _APPLY_PATH or seg.startswith("apply") for seg in _path_segments(item.get("source_url")))
+
+
+def open_call_rejection(item: dict, today=None) -> str | None:
+    """Why this row is not an open call, or None when someone can apply now.
+
+    `today` is injectable for tests. Production uses the UTC date.
+    """
+    if today is None:
+        today = _utc_today()
+    area = item.get("area")
+    if area == 2:
+        return "award or results announcement (area 2) is not an open call"
+    if area == 1:
+        return "budget or policy news (area 1) is not an open call"
+    if area != OPEN_PROGRAM_AREA:
+        return f"area {area} is not an open call someone can apply to now"
+    text = _words(item)
+    if any(phrase in text for phrase in _RESULT_PHRASES):
+        return "award or results announcement"
+    if any(seg in _RESULTS_PATH for seg in _path_segments(item.get("source_url"))):
+        return "award or results announcement"
+    if any(phrase in text for phrase in _BUDGET_PHRASES):
+        return "budget or policy news"
+    if any(phrase in text for phrase in _CLOSED_PHRASES):
+        return "closed or past call"
+    status = _deadline_status(item.get("deadline"), today)
+    if status == "past":
+        return f"closed or past call: deadline {item.get('deadline')} is before {today.isoformat()}"
+    if status != "future" and status != "rolling":
+        return "no future deadline or rolling intake"
+    if not _has_apply_path(item):
+        return "no clear way to apply"
+    return None
+
+
+def _reject_classification(reason, original) -> str:
+    text = (reason or "").lower()
+    if "closed" in text or "past call" in text:
+        return "EXPIRED"
+    if any(word in text for word in ("award", "result", "budget", "policy")):
+        return "NEWS"
+    if original in REJECT_CLASS:
+        return original
+    return "NOISE"
+
+
 def prepare_opportunity(o: dict) -> tuple[dict | None, str | None]:
     """Normalize one opportunity for the wire.
 
-    GRANT is only area 3 (an open program). Other accepted areas are NEWS so
-    grants.watch, which keys off GRANT, does not ingest them. Returns
-    (item, None) to keep or (None, reason) to reject.
+    A kept row is an open call: area 3, classification GRANT, a deadline that
+    has not passed (or rolling intake), and a stated way to apply. Award or
+    results announcements, budget or policy news, and closed calls are
+    rejected. Returns (item, None) to keep or (None, reason) to reject.
     """
     if not isinstance(o, dict):
         return None, "not an object"
@@ -80,17 +207,14 @@ def prepare_opportunity(o: dict) -> tuple[dict | None, str | None]:
         return None, f"area {item.get('area')!r} is not 1-6"
     item["area"] = area
     cls = item.get("classification")
-    if area == OPEN_PROGRAM_AREA:
-        if cls in ("EXPIRED", "NOISE"):
-            return None, f"open program (area 3) classified {cls}"
-        item["classification"] = "GRANT"
-        return item, None
-    if cls == "NOISE":
+    if area == OPEN_PROGRAM_AREA and cls in ("EXPIRED", "NOISE"):
+        return None, f"open program (area 3) classified {cls}"
+    if area != OPEN_PROGRAM_AREA and cls == "NOISE":
         return None, "classification NOISE"
-    if cls in ("GRANT", "EXPIRED", None, ""):
-        # A closed round's published result is area 2, not an expired open call,
-        # and it must not be labeled GRANT.
-        item["classification"] = "NEWS"
+    reason = open_call_rejection(item)
+    if reason:
+        return None, reason
+    item["classification"] = "GRANT"
     return item, None
 
 
@@ -152,7 +276,7 @@ def validate_payload(payload: dict) -> dict:
             rejected.append({
                 "name": o.get("name"),
                 "source_url": o.get("source_url"),
-                "classification": "NOISE" if o.get("classification") not in REJECT_CLASS else o["classification"],
+                "classification": _reject_classification(reason, o.get("classification")),
                 "reason": reason,
             })
             dropped += 1

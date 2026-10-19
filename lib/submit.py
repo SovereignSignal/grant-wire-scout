@@ -49,8 +49,9 @@ class _RefuseRedirect(urllib.request.HTTPRedirectHandler):
 def opportunities_for_submit(opps):
     """Items the Wire Room should receive.
 
-    Each kept object has integer `area` 1-6. Open programs (area 3) are GRANT;
-    every other area is NEWS so grants.watch does not treat it as an open program.
+    Each kept object is an open call: area 3, classification GRANT, a future
+    deadline or rolling intake, and a clear way to apply. Award or results
+    announcements, budget or policy news, and closed or past calls are dropped.
     """
     if not isinstance(opps, list):
         return []
@@ -105,7 +106,7 @@ def main(opps_path, wire, variant, scan_date, api_base=None):
     source = os.environ.get("SCOUT_SCAN_SOURCE", DEFAULT_SOURCE)
     body_obj, opps = build_submission_body(opps, wire, variant, scan_date, source)
     if not opps:
-        print(f"submit: no area 1-6 opportunities in {opps_path} — nothing to deliver (not an error)")
+        print(f"submit: no open calls in {opps_path} — nothing to deliver (not an error)")
         return 0
     body = json.dumps(body_obj).encode()
 

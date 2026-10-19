@@ -381,7 +381,7 @@ if "--resume" in sys.argv:
         p = {"producer": "grok-build", "variant": "A", "wire": "crypto", "run_id": "e2e-g",
              "generated_at": "2026-09-23T00:00:00Z", "rejected": [],
              "opportunities": [{"name": "Grok Resume Flush Grant", "source_url": base + "/g1",
-                 "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.",
+                 "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31", "summary": "Apply at the program page.",
                  "area": 3, "classification": "GRANT", "fit_score": 80, "fit_reason": "verified before the kill",
                  "evidence": [base + "/g1"], "discovered_via": "x_search"}]}
         out(json.dumps(p)); sys.exit(0)
@@ -391,7 +391,7 @@ if mode == "ok":
     p = {"producer": "grok-build", "variant": "A", "wire": "crypto", "run_id": "e2e-g",
          "generated_at": "2026-08-22T00:00:00Z", "rejected": [],
          "opportunities": [{"name": "Grok E2E Grant", "source_url": base + "/g1", "wire": "crypto",
-             "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "area": 3, "classification": "GRANT",
+             "amount": "$10k", "deadline": "2026-12-31", "summary": "Apply at the program page.", "area": 3, "classification": "GRANT",
              "fit_score": 80, "fit_reason": "fresh x lead", "evidence": [base + "/g1"],
              "discovered_via": "x_search"}]}
     out(json.dumps(p)); sys.exit(0)
@@ -417,7 +417,7 @@ def ok_payload(name):
     return {"producer": "grok-build", "variant": "A", "wire": "crypto", "run_id": "e2e-g",
          "generated_at": "2026-08-22T00:00:00Z", "rejected": [],
          "opportunities": [{"name": name, "source_url": base + "/g1", "wire": "crypto",
-             "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "area": 3, "classification": "GRANT",
+             "amount": "$10k", "deadline": "2026-12-31", "summary": "Apply at the program page.", "area": 3, "classification": "GRANT",
              "fit_score": 80, "fit_reason": "fresh x lead", "evidence": [base + "/g1"],
              "discovered_via": "x_search"}]}
 def truncated():
@@ -442,7 +442,7 @@ if mode == "outdated-always":
 if mode == "no-meta":
     p = {"opportunities": [{"name": "Grok No-Meta Grant", "source_url": base + "/g1",
              "wire": "crypto", "amount": "$10k", "deadline": "2026-12-31",
-             "summary": "Test grant.", "area": 3, "classification": "GRANT", "fit_score": 80,
+             "summary": "Apply at the program page.", "area": 3, "classification": "GRANT", "fit_score": 80,
              "fit_reason": "fresh x lead", "evidence": [base + "/g1"],
              "discovered_via": "x_search"}], "rejected": []}
     out(json.dumps(p), stopReason="error", numTurns=5); sys.exit(1)
