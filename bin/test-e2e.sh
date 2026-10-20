@@ -89,7 +89,7 @@ def payload():
     return {"producer": "claude-code", "variant": "A", "wire": "crypto", "run_id": "e2e",
          "generated_at": "2026-07-01T00:00:00Z", "rejected": [],
          "opportunities": [{"name": "E2E Test Grant", "source_url": base + "/g1", "wire": "crypto",
-             "amount": "$10k", "deadline": "2026-12-31", "summary": "Test grant.", "area": 3, "classification": "GRANT",
+             "amount": "$10k", "deadline": "2099-12-31", "summary": "Apply at the program page.", "area": 3, "classification": "GRANT",
              "fit_score": 80, "fit_reason": "test", "evidence": [base + "/g1"], "discovered_via": "web_search"}]}
 if "--resume" in sys.argv:
     # The producer's resume-flush after a wall-clock kill. STUB_RESUME=payload plays a
